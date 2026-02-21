@@ -18,3 +18,11 @@ Each entry below is appended by the AI agent after completing a feature.
 - **Summary**: Created src/cli.ts using util.parseArgs to parse arguments and dispatch to subcommands (infra, index, mcp, help, version). Unknown commands print usage to stderr and exit 2. --help works on root and each subcommand. --version prints package version. Subcommands infra/index/mcp are stubbed. Added 14 unit tests covering all acceptance criteria.
 - **TypeScript**: Compiles without errors
 - **Tests**: 19/19 passing (14 new + 5 existing)
+
+---
+
+## Iteration 3 - US-003: Implement config loader with deprecation compatibility
+- **Date**: 2026-02-22
+- **Summary**: Refactored src/config.ts to return RgkConfig instead of GraphConfig. Implements env var precedence (CLI flags > RGK_ env vars > legacy REACT_GRAPH_/NEO4J_ vars > config file > defaults). Loads rgk.config.json by default, falls back to graph-config.json with deprecation warning. Old env vars trigger stderr warnings with replacement guidance. New names take precedence when both exist. Added toGraphConfig() bridge for backward compatibility. Updated all callers (index.ts, test files) to use the bridge. Added 10 unit tests covering all acceptance criteria.
+- **TypeScript**: Compiles without errors
+- **Tests**: 29/29 passing (10 new + 19 existing)
