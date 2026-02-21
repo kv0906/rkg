@@ -4,6 +4,7 @@ import { parseArgs } from 'node:util';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
+import { infraUp, infraDown, infraStatus } from './core/infra-service.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -85,7 +86,7 @@ function printUnknownCommand(cmd: string): void {
   console.error(USAGE);
 }
 
-export function run(args: string[]): number {
+export function run(args: string[]): number | Promise<number> {
   // Parse top-level flags (before any subcommand)
   let parsed: ReturnType<typeof parseArgs>;
   try {
@@ -155,7 +156,15 @@ export function run(args: string[]): number {
       return 0;
     }
 
-    case 'infra':
+    case 'infra': {
+      // Check for --help on subcommand args
+      if (args.includes('--help')) {
+        printSubcommandHelp(command);
+        return 0;
+      }
+      return runInfra(positionals.slice(1), args);
+    }
+
     case 'index':
     case 'mcp':
       // Check for --help on subcommand args
@@ -166,6 +175,79 @@ export function run(args: string[]): number {
       // Stub: these will be implemented in later user stories
       console.error(`Command '${command}' is not yet implemented.`);
       return 1;
+  }
+}
+
+async function runInfra(positionals: string[], rawArgs: string[]): Promise<number> {
+  const action = positionals[0];
+
+  if (!action || !['up', 'down', 'status'].includes(action)) {
+    console.error(action ? `Unknown infra action: ${action}\n` : 'Missing infra action.\n');
+    console.error(SUBCOMMAND_HELP.infra);
+    return 1;
+  }
+
+  // Parse infra-specific flags
+  let infraParsed: ReturnType<typeof parseArgs>;
+  try {
+    infraParsed = parseArgs({
+      args: rawArgs.slice(rawArgs.indexOf(action) + 1),
+      options: {
+        wait: { type: 'boolean', default: false },
+        timeout: { type: 'string' },
+        volumes: { type: 'boolean', default: false },
+      },
+      allowPositionals: true,
+      strict: false,
+    });
+  } catch {
+    console.error(SUBCOMMAND_HELP.infra);
+    return 1;
+  }
+
+  try {
+    switch (action) {
+      case 'up': {
+        const wait = infraParsed.values.wait as boolean;
+        const timeoutStr = infraParsed.values.timeout as string | undefined;
+        const timeout = timeoutStr ? parseInt(timeoutStr, 10) : undefined;
+
+        if (timeoutStr !== undefined && (isNaN(timeout!) || timeout! <= 0)) {
+          console.error(`Invalid timeout value: ${timeoutStr}`);
+          return 1;
+        }
+
+        console.log('Starting Neo4j via docker compose...');
+        await infraUp({ wait, timeout });
+        console.log(wait ? 'Neo4j is ready.' : 'Neo4j container started.');
+        return 0;
+      }
+
+      case 'down': {
+        const volumes = infraParsed.values.volumes as boolean;
+        console.log(volumes ? 'Stopping Neo4j and removing volumes...' : 'Stopping Neo4j...');
+        infraDown({ volumes });
+        console.log('Neo4j stopped.');
+        return 0;
+      }
+
+      case 'status': {
+        const result = await infraStatus();
+        console.log(`Neo4j: ${result.running ? 'running' : 'stopped'}`);
+        console.log('');
+        for (const check of result.diagnostics.checks) {
+          const icon = check.status === 'pass' ? '[PASS]' : '[FAIL]';
+          console.log(`  ${icon} ${check.check}: ${check.message}`);
+        }
+        return 0;
+      }
+
+      default:
+        return 1;
+    }
+  } catch (err) {
+    console.error(`Error: ${(err as Error).message}`);
+    return 1;
   }
 }
 
@@ -181,6 +263,10 @@ const isDirectRun =
 
 if (isDirectRun) {
   const mainArgs = process.argv.slice(2);
-  const exitCode = run(mainArgs);
-  process.exit(exitCode);
+  const result = run(mainArgs);
+  if (result instanceof Promise) {
+    result.then(code => process.exit(code)).catch(() => process.exit(1));
+  } else {
+    process.exit(result);
+  }
 }
