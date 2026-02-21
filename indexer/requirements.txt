@@ -1,0 +1,4 @@
+cocoindex
+tree-sitter
+tree-sitter-typescript
+psycopg[binary]

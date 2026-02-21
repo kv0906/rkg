@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.graph-data/
+test/.test-graph-data/
+test/.test-mcp-data/
+__pycache__/
+*.pyc
+.venv/
+indexer/.venv/

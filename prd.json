@@ -1,0 +1,208 @@
+{
+  "project": "RGK (React Knowledge Graph)",
+  "description": "Rebrand and productize react-graph as an open-source CLI (rgk) that makes local infra, indexing, and MCP workflows easy for React/Next.js repos, including messy codebases.",
+  "userStories": [
+    {
+      "id": "US-001",
+      "priority": 1,
+      "title": "Finalize package identity and config schema",
+      "description": "Update package.json with new identity (@rgk/react-knowledge-graph), set bin field to rgk, define RGK_ env vars, create rgk.config.json schema, and establish TypeScript config interface.",
+      "acceptanceCriteria": [
+        "package.json name is @rgk/react-knowledge-graph",
+        "package.json bin field maps rgk to dist/cli.js",
+        "src/types/config.ts exports RgkConfig interface covering neo4j, indexing, and classification options",
+        "Default config file name is rgk.config.json",
+        "Env var names: RGK_CONFIG, RGK_NEO4J_URI, RGK_NEO4J_USER, RGK_NEO4J_PASSWORD, RGK_NEO4J_DATABASE",
+        "TypeScript compiles without errors"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-002",
+      "priority": 2,
+      "title": "Create CLI entrypoint and command router",
+      "description": "Create src/cli.ts that uses util.parseArgs to parse arguments and dispatch to subcommands (infra, index, mcp, help, version). Unknown commands exit 2, --help works on root and subcommands, --version prints package version.",
+      "acceptanceCriteria": [
+        "src/cli.ts exists and is the bin entrypoint",
+        "Routes to subcommands: infra, index, mcp, help, version",
+        "Unknown command prints usage to stderr and exits with code 2",
+        "--help flag works on root command and each subcommand",
+        "--version prints package version from package.json and exits 0",
+        "Unit tests cover: unknown command exits 2, --help exits 0, --version exits 0",
+        "TypeScript compiles without errors",
+        "All tests pass"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-003",
+      "priority": 3,
+      "title": "Implement config loader with deprecation compatibility",
+      "description": "Refactor src/config.ts to check RGK_ env vars first, fall back to old REACT_GRAPH_*/NEO4J_* vars with deprecation warnings. Load rgk.config.json by default, fall back to graph-config.json. New names take precedence when both exist.",
+      "acceptanceCriteria": [
+        "src/config.ts exports loadConfig() that returns RgkConfig",
+        "Precedence: CLI flags > RGK_ env vars > REACT_GRAPH_/NEO4J_ env vars > config file > defaults",
+        "rgk.config.json is primary config file, graph-config.json is fallback",
+        "When old names are used, deprecation warning printed to stderr with replacement guidance",
+        "When both old and new names exist, new names take precedence",
+        "Unit tests cover: new env vars, old env vars with warning, both present, config file fallback",
+        "TypeScript compiles without errors",
+        "All tests pass"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-004",
+      "priority": 4,
+      "title": "Extract index service from existing code",
+      "description": "Extract indexing logic into src/core/index-service.ts with a runIndex(options) function. Flow: parse workspace with ts-morph, clear graph, ingest nodes/edges, return stats. Both CLI and MCP server should use this service.",
+      "acceptanceCriteria": [
+        "src/core/index-service.ts exports runIndex(options) function",
+        "Options include: workspacePath, configPath, outputFormat",
+        "Flow: parse workspace -> clear graph -> ingest nodes/edges -> return stats",
+        "Returns structured result: { nodeCount, edgeCount, classificationSummary }",
+        "Existing MCP index tool calls runIndex instead of inline logic",
+        "Unit test with fixture directory yields expected node/edge counts",
+        "TypeScript compiles without errors",
+        "All tests pass"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-005",
+      "priority": 5,
+      "title": "Extract health service for diagnostics",
+      "description": "Create src/core/health-service.ts with diagnostic functions for Neo4j connectivity, auth validity, config file presence, and Docker status. Returns structured health report used by mcp doctor and infra status.",
+      "acceptanceCriteria": [
+        "src/core/health-service.ts exports runDiagnostics() function",
+        "Checks: Neo4j connectivity, Neo4j auth, config file exists, Docker running",
+        "Returns structured report: array of { check, status: pass|fail, message }",
+        "Unit tests cover: all-healthy scenario, neo4j-down scenario, missing-config scenario",
+        "TypeScript compiles without errors",
+        "All tests pass"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-006",
+      "priority": 6,
+      "title": "Implement rgk infra up/down/status commands",
+      "description": "Implement infra subcommands that manage Neo4j via docker compose. 'up' starts services with optional --wait polling, 'down' stops with optional --volumes, 'status' reports state using health service.",
+      "acceptanceCriteria": [
+        "rgk infra up starts Neo4j via docker compose up -d",
+        "rgk infra up --wait polls Neo4j health until ready (default 60s)",
+        "rgk infra up --wait --timeout 120 overrides wait duration",
+        "rgk infra down stops services; --volumes also removes data volumes",
+        "rgk infra status reports running/stopped state and Neo4j health",
+        "Exit code 0 on success, 1 on failure",
+        "Integration test: infra up --wait reaches healthy Neo4j, infra status reports healthy, infra down cleans up",
+        "TypeScript compiles without errors",
+        "All tests pass"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-007",
+      "priority": 7,
+      "title": "Implement rgk index CLI command",
+      "description": "Wire up the index subcommand to call index-service. Supports workspace path argument, --config, --stats, --json flags. Human-readable output by default.",
+      "acceptanceCriteria": [
+        "rgk index [workspacePath] indexes the given or current directory",
+        "--config <path> overrides config file location",
+        "--stats prints summary (nodes, edges, classifications) to stdout",
+        "--json outputs machine-readable JSON",
+        "Default output is human-readable with colors",
+        "Exit code 0 on success, 1 on error",
+        "Integration test: index fixture directory yields expected counts",
+        "Integration test: --json output matches stable schema",
+        "TypeScript compiles without errors",
+        "All tests pass"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-008",
+      "priority": 8,
+      "title": "Implement adaptive classification for messy repos",
+      "description": "Add classification layer to indexer that infers file kind and domain tags using AST + path signals, with confidence scores. Report coverage by confidence bucket and detect hotspots. Support config override rules.",
+      "acceptanceCriteria": [
+        "Infers kind: next_page, next_layout, next_route, react_component, hook, util, unknown",
+        "Infers domain tags from paths/imports: admin, profile, storefront, api, etc.",
+        "Each inferred label has confidence score 0-1",
+        "Coverage report: breakdown by confidence bucket (high >0.8, medium 0.5-0.8, low <0.5, unknown)",
+        "Hotspot detection: high fan-in, high fan-out, orphans, duplicate/similar candidates",
+        "Config supports path/glob rules to override kind/domain/layer",
+        "Messy fixture repo indexes successfully with partial unknown (no hard failure)",
+        "TypeScript compiles without errors",
+        "All tests pass"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-009",
+      "priority": 9,
+      "title": "Implement rgk mcp start and rgk mcp doctor",
+      "description": "Extract MCP server startup from src/index.ts into src/mcp/server.ts. Wire up mcp start (stdio foreground) and mcp doctor (health checks) subcommands. Update server identity to rgk.",
+      "acceptanceCriteria": [
+        "src/mcp/server.ts exports startMcpServer() extracted from src/index.ts",
+        "rgk mcp start launches MCP server over stdio in foreground",
+        "rgk mcp start --config <path> overrides config",
+        "MCP server identity is rgk (not react-graph-mcp)",
+        "All existing MCP tools remain functional",
+        "rgk mcp doctor runs health checks and prints diagnostic report",
+        "src/index.ts remains as compatibility wrapper calling src/mcp/server.ts",
+        "Exit code 0 on success, 1 on failure",
+        "TypeScript compiles without errors",
+        "All tests pass"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-010",
+      "priority": 10,
+      "title": "Rebrand all user-facing output",
+      "description": "Ensure all logs, help text, error messages, and server identity use RGK branding. No stale react-graph references in user-facing output.",
+      "acceptanceCriteria": [
+        "All CLI help text references rgk command and RGK product name",
+        "All error messages use RGK branding",
+        "MCP server name is rgk in protocol responses",
+        "grep -r 'react-graph' on src/ returns zero matches in user-facing strings (internal code refs OK)",
+        "Rebrand regression test: scan all stdout/stderr output for stale naming",
+        "TypeScript compiles without errors",
+        "All tests pass"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-011",
+      "priority": 11,
+      "title": "Write documentation (README, CLI reference, migration guide)",
+      "description": "Create README.md with 30-second quickstart, CLI.md with command reference, and MIGRATION.md with old-to-new mapping table and deprecation timeline.",
+      "acceptanceCriteria": [
+        "README.md has 30-second quickstart with npx and global install examples",
+        "README.md has first-run troubleshooting section",
+        "CLI.md has command-by-command reference with examples for all subcommands",
+        "MIGRATION.md has old->new mapping table for env vars, config files, and CLI commands",
+        "MIGRATION.md states deprecation timeline and removal target version",
+        "All code examples in docs are accurate and match current implementation"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-012",
+      "priority": 12,
+      "title": "Set up CI pipeline and npm release automation",
+      "description": "Create GitHub Actions CI that triggers on vX.Y.Z tags. Pipeline: install, build, typecheck, test (unit + integration), publish to npm, create GitHub release.",
+      "acceptanceCriteria": [
+        ".github/workflows/release.yml exists",
+        "CI triggers on tags matching vX.Y.Z pattern",
+        "Pipeline runs: npm install, npm run build, tsc --noEmit, npm test",
+        "Integration tests run with Docker (docker compose for Neo4j)",
+        "On success: publishes to npm and creates GitHub release",
+        "rgk version output matches the tag version",
+        "TypeScript compiles without errors"
+      ],
+      "passes": false
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "sourceDir": "./src",
+  "include": ["**/*.tsx", "**/*.ts"],
+  "exclude": ["**/*.test.*", "**/*.spec.*", "**/*.stories.*", "**/__tests__/**"],
+  "layerMapping": {
+    "atoms": "atom",
+    "molecules": "molecule",
+    "organisms": "organism",
+    "templates": "template",
+    "pages": "page",
+    "ui": "atom",
+    "layout": "organism",
+    "features": "organism"
+  },
+  "defaultLayer": "unknown",
+  "neo4j": {
+    "uri": "neo4j://127.0.0.1:7687",
+    "user": "neo4j",
+    "password": "neo4jadmin",
+    "database": "neo4j"
+  }
+}
