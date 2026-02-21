@@ -4,3 +4,9 @@ This file tracks the progress of each Ralph loop iteration.
 Each entry below is appended by the AI agent after completing a feature.
 
 ---
+
+## Iteration 1 - US-001: Finalize package identity and config schema
+- **Date**: 2026-02-22
+- **Summary**: Renamed package to @rgk/react-knowledge-graph, added bin field (rgk -> dist/src/cli.js), created src/types/config.ts with RgkConfig interface covering neo4j/indexing/classification, defined RGK_ env vars and default config file name (rgk.config.json), added unit tests for config types.
+- **TypeScript**: Compiles without errors
+- **Tests**: 5/5 passing

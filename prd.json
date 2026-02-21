@@ -15,7 +15,7 @@
         "Env var names: RGK_CONFIG, RGK_NEO4J_URI, RGK_NEO4J_USER, RGK_NEO4J_PASSWORD, RGK_NEO4J_DATABASE",
         "TypeScript compiles without errors"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "US-002",
