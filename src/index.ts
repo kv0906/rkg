@@ -5,11 +5,13 @@ import {
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import { loadConfig, toGraphConfig } from './config.js';
-import { parseCodebase } from './parser.js';
-import { initDatabase, clearGraph, ingestComponents, ingestDependencies, ingestModules, ingestLayers, query, closeDatabase } from './db.js';
+import { initDatabase, query, closeDatabase } from './db.js';
+import { runIndex } from './core/index-service.js';
 import type { GraphConfig, ToolResponse, PropInfo } from './types.js';
+import type { RgkConfig } from './types/config.js';
 
 let config: GraphConfig;
+let rgkConfig: RgkConfig;
 
 function safeJsonParse<T>(str: unknown, fallback: T): T {
   if (typeof str !== 'string') return fallback;
@@ -155,19 +157,14 @@ const TOOLS = [
 
 async function handleReindex(): Promise<ReturnType<typeof success>> {
   const start = Date.now();
-  await clearGraph(config.neo4j.database);
-  const result = parseCodebase(config);
-  await ingestComponents(result.components, config.neo4j.database);
-  await ingestDependencies(result.dependencies, config.neo4j.database);
-  await ingestModules(result.modules, result.components, config.neo4j.database);
-  await ingestLayers(result.layers, result.components, config.neo4j.database);
+  const result = await runIndex({ config: rgkConfig });
   const elapsed_ms = Date.now() - start;
   return success(
     {
-      components: result.components.length,
-      dependencies: result.dependencies.length,
-      modules: result.modules.length,
-      layers: result.layers.length,
+      components: result.nodeCount,
+      dependencies: result.edgeCount,
+      modules: Object.keys(result.classificationSummary).length,
+      layers: Object.keys(result.classificationSummary).length,
       elapsed_ms,
     },
     elapsed_ms
@@ -601,7 +598,8 @@ async function handleExecuteCypher(args: { query: string }) {
 
 async function main() {
   // Load configuration
-  config = toGraphConfig(loadConfig());
+  rgkConfig = loadConfig();
+  config = toGraphConfig(rgkConfig);
 
   // Initialize Neo4j connection
   await initDatabase(config.neo4j);
@@ -611,12 +609,8 @@ async function main() {
   const total = (countResult[0]?.total as number) ?? 0;
   if (total === 0) {
     console.error('[react-graph] No graph data found. Auto-indexing...');
-    const result = parseCodebase(config);
-    await ingestComponents(result.components, config.neo4j.database);
-    await ingestDependencies(result.dependencies, config.neo4j.database);
-    await ingestModules(result.modules, result.components, config.neo4j.database);
-    await ingestLayers(result.layers, result.components, config.neo4j.database);
-    console.error(`[react-graph] Indexed ${result.components.length} components, ${result.dependencies.length} dependencies, ${result.modules.length} modules, ${result.layers.length} layers.`);
+    const result = await runIndex({ config: rgkConfig });
+    console.error(`[react-graph] Indexed ${result.nodeCount} components, ${result.edgeCount} dependencies.`);
   } else {
     console.error(`[react-graph] Graph loaded: ${total} components.`);
   }
