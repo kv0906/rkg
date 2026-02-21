@@ -50,3 +50,11 @@ Each entry below is appended by the AI agent after completing a feature.
 - **Summary**: Created src/core/infra-service.ts with infraUp(), infraDown(), and infraStatus() functions. infraUp starts Neo4j via docker compose up -d with optional --wait polling and configurable --timeout. infraDown stops services with optional --volumes flag to remove data volumes. infraStatus reports running/stopped state using health-service diagnostics. Updated src/cli.ts to dispatch infra subcommands (made run() return number | Promise<number> for async support). Added 11 unit tests for infra-service (exports, docker compose operations, status reporting) and 4 updated CLI tests for infra routing and status output.
 - **TypeScript**: Compiles without errors
 - **Tests**: 63/63 passing (15 new + 48 existing)
+
+---
+
+## Iteration 7 - US-007: Implement rgk index CLI command
+- **Date**: 2026-02-22
+- **Summary**: Wired up the index subcommand in src/cli.ts to call runIndex() from index-service. Supports workspace path as positional argument, --config to override config file, --stats for human-readable summary (nodes, edges, classifications), and --json for machine-readable JSON output. Default output shows indexed component/dependency count with classification breakdown. Loads config via loadConfig() with proper error handling. Added 5 integration tests covering --json schema validation, --stats output, default output, --config with missing file, and exit code behavior.
+- **TypeScript**: Compiles without errors
+- **Tests**: 68/68 passing (5 new + 63 existing)
