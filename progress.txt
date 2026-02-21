@@ -34,3 +34,11 @@ Each entry below is appended by the AI agent after completing a feature.
 - **Summary**: Created src/core/index-service.ts with runIndex(options) function that encapsulates the full indexing pipeline (parse workspace -> clear graph -> ingest nodes/edges -> return stats). Returns structured IndexResult with nodeCount, edgeCount, and classificationSummary. Updated MCP server (src/index.ts) to use runIndex instead of inline indexing logic for both auto-index on startup and reindex_codebase tool. Added 9 unit tests covering exports, fixture parsing with expected counts, classification summary, error handling, and config integration.
 - **TypeScript**: Compiles without errors
 - **Tests**: 38/38 passing (9 new + 29 existing)
+
+---
+
+## Iteration 5 - US-005: Extract health service for diagnostics
+- **Date**: 2026-02-22
+- **Summary**: Created src/core/health-service.ts with runDiagnostics() function that checks Neo4j connectivity, Neo4j auth validity, config file presence (rgk.config.json or graph-config.json), and Docker daemon status. Returns structured DiagnosticReport with array of { check, status: pass|fail, message }. Added 10 unit tests covering: exports, report structure validation, missing-config scenario, config-file-present scenarios (new and legacy), neo4j-down scenario, structure validation, and configPath option.
+- **TypeScript**: Compiles without errors
+- **Tests**: 48/48 passing (10 new + 38 existing)
