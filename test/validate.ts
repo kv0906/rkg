@@ -1,10 +1,10 @@
-import { loadConfig } from '../src/config.js';
+import { loadConfig, toGraphConfig } from '../src/config.js';
 import { parseCodebase } from '../src/parser.js';
 import { initDatabase, clearGraph, ingestComponents, ingestDependencies, query, closeDatabase } from '../src/db.js';
 import { resolve } from 'path';
 
 const PROJECT_ROOT = resolve(import.meta.dirname, '..', '..');
-const fixtureConfig = loadConfig(resolve(PROJECT_ROOT, 'test', 'fixture-config.json'));
+const fixtureConfig = toGraphConfig(loadConfig(resolve(PROJECT_ROOT, 'test', 'fixture-config.json')));
 
 console.log('=== Parsing fixture codebase ===');
 console.log('sourceDir:', fixtureConfig.sourceDir);

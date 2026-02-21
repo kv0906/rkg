@@ -2,13 +2,13 @@
  * Demo: Complex graph traversals using Module, Layer, CONTAINS, and BELONGS_TO_LAYER.
  * Shows real-world queries a frontend dev would ask.
  */
-import { loadConfig } from '../src/config.js';
+import { loadConfig, toGraphConfig } from '../src/config.js';
 import { parseCodebase } from '../src/parser.js';
 import { initDatabase, clearGraph, ingestComponents, ingestDependencies, ingestModules, ingestLayers, query, closeDatabase } from '../src/db.js';
 import { resolve } from 'path';
 
 const PROJECT_ROOT = resolve(import.meta.dirname, '..', '..');
-const config = loadConfig(resolve(PROJECT_ROOT, 'test', 'fixture-config.json'));
+const config = toGraphConfig(loadConfig(resolve(PROJECT_ROOT, 'test', 'fixture-config.json')));
 
 // Parse and ingest
 const parseResult = parseCodebase(config);

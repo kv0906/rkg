@@ -2,13 +2,13 @@
  * Tests the MCP server tools by running queries against Neo4j.
  * Requires Neo4j running on bolt://localhost:7687.
  */
-import { loadConfig } from '../src/config.js';
+import { loadConfig, toGraphConfig } from '../src/config.js';
 import { parseCodebase } from '../src/parser.js';
 import { initDatabase, clearGraph, ingestComponents, ingestDependencies, ingestModules, ingestLayers, query, closeDatabase } from '../src/db.js';
 import { resolve } from 'path';
 
 const PROJECT_ROOT = resolve(import.meta.dirname, '..', '..');
-const config = loadConfig(resolve(PROJECT_ROOT, 'test', 'fixture-config.json'));
+const config = toGraphConfig(loadConfig(resolve(PROJECT_ROOT, 'test', 'fixture-config.json')));
 
 // Parse and ingest
 const parseResult = parseCodebase(config);

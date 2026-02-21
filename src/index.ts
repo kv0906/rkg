@@ -4,7 +4,7 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
-import { loadConfig } from './config.js';
+import { loadConfig, toGraphConfig } from './config.js';
 import { parseCodebase } from './parser.js';
 import { initDatabase, clearGraph, ingestComponents, ingestDependencies, ingestModules, ingestLayers, query, closeDatabase } from './db.js';
 import type { GraphConfig, ToolResponse, PropInfo } from './types.js';
@@ -601,7 +601,7 @@ async function handleExecuteCypher(args: { query: string }) {
 
 async function main() {
   // Load configuration
-  config = loadConfig();
+  config = toGraphConfig(loadConfig());
 
   // Initialize Neo4j connection
   await initDatabase(config.neo4j);
