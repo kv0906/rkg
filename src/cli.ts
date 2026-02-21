@@ -5,6 +5,8 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { infraUp, infraDown, infraStatus } from './core/infra-service.js';
+import { runIndex } from './core/index-service.js';
+import { loadConfig } from './config.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -165,15 +167,22 @@ export function run(args: string[]): number | Promise<number> {
       return runInfra(positionals.slice(1), args);
     }
 
-    case 'index':
+    case 'index': {
+      if (args.includes('--help')) {
+        printSubcommandHelp(command);
+        return 0;
+      }
+      return runIndexCommand(positionals.slice(1), args);
+    }
+
     case 'mcp':
       // Check for --help on subcommand args
       if (args.includes('--help')) {
         printSubcommandHelp(command);
         return 0;
       }
-      // Stub: these will be implemented in later user stories
-      console.error(`Command '${command}' is not yet implemented.`);
+      // Stub: will be implemented in later user stories
+      console.error(`Command 'mcp' is not yet implemented.`);
       return 1;
   }
 }
@@ -245,6 +254,66 @@ async function runInfra(positionals: string[], rawArgs: string[]): Promise<numbe
       default:
         return 1;
     }
+  } catch (err) {
+    console.error(`Error: ${(err as Error).message}`);
+    return 1;
+  }
+}
+
+async function runIndexCommand(positionals: string[], rawArgs: string[]): Promise<number> {
+  // Parse index-specific flags
+  let indexParsed: ReturnType<typeof parseArgs>;
+  try {
+    // Find where index-specific args start (after 'index' in rawArgs)
+    const indexPos = rawArgs.indexOf('index');
+    const indexArgs = indexPos >= 0 ? rawArgs.slice(indexPos + 1) : rawArgs;
+    indexParsed = parseArgs({
+      args: indexArgs,
+      options: {
+        config: { type: 'string' },
+        stats: { type: 'boolean', default: false },
+        json: { type: 'boolean', default: false },
+      },
+      allowPositionals: true,
+      strict: false,
+    });
+  } catch {
+    console.error(SUBCOMMAND_HELP.index);
+    return 1;
+  }
+
+  const workspacePath = positionals[0] || undefined;
+  const configPath = indexParsed.values.config as string | undefined;
+  const showStats = indexParsed.values.stats as boolean;
+  const jsonOutput = indexParsed.values.json as boolean;
+
+  try {
+    const config = loadConfig(configPath);
+
+    const result = await runIndex({
+      workspacePath,
+      configPath,
+      config,
+      outputFormat: jsonOutput ? 'json' : 'human',
+    });
+
+    if (jsonOutput) {
+      console.log(JSON.stringify(result, null, 2));
+    } else if (showStats) {
+      console.log(`Nodes: ${result.nodeCount}`);
+      console.log(`Edges: ${result.edgeCount}`);
+      console.log('Classifications:');
+      for (const [layer, count] of Object.entries(result.classificationSummary)) {
+        console.log(`  ${layer}: ${count}`);
+      }
+    } else {
+      console.log(`Indexed ${result.nodeCount} components with ${result.edgeCount} dependencies.`);
+      for (const [layer, count] of Object.entries(result.classificationSummary)) {
+        console.log(`  ${layer}: ${count}`);
+      }
+    }
+
+    return 0;
   } catch (err) {
     console.error(`Error: ${(err as Error).message}`);
     return 1;
