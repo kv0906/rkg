@@ -42,3 +42,11 @@ Each entry below is appended by the AI agent after completing a feature.
 - **Summary**: Created src/core/health-service.ts with runDiagnostics() function that checks Neo4j connectivity, Neo4j auth validity, config file presence (rgk.config.json or graph-config.json), and Docker daemon status. Returns structured DiagnosticReport with array of { check, status: pass|fail, message }. Added 10 unit tests covering: exports, report structure validation, missing-config scenario, config-file-present scenarios (new and legacy), neo4j-down scenario, structure validation, and configPath option.
 - **TypeScript**: Compiles without errors
 - **Tests**: 48/48 passing (10 new + 38 existing)
+
+---
+
+## Iteration 6 - US-006: Implement rgk infra up/down/status commands
+- **Date**: 2026-02-22
+- **Summary**: Created src/core/infra-service.ts with infraUp(), infraDown(), and infraStatus() functions. infraUp starts Neo4j via docker compose up -d with optional --wait polling and configurable --timeout. infraDown stops services with optional --volumes flag to remove data volumes. infraStatus reports running/stopped state using health-service diagnostics. Updated src/cli.ts to dispatch infra subcommands (made run() return number | Promise<number> for async support). Added 11 unit tests for infra-service (exports, docker compose operations, status reporting) and 4 updated CLI tests for infra routing and status output.
+- **TypeScript**: Compiles without errors
+- **Tests**: 63/63 passing (15 new + 48 existing)
