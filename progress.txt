@@ -10,3 +10,11 @@ Each entry below is appended by the AI agent after completing a feature.
 - **Summary**: Renamed package to @rgk/react-knowledge-graph, added bin field (rgk -> dist/src/cli.js), created src/types/config.ts with RgkConfig interface covering neo4j/indexing/classification, defined RGK_ env vars and default config file name (rgk.config.json), added unit tests for config types.
 - **TypeScript**: Compiles without errors
 - **Tests**: 5/5 passing
+
+---
+
+## Iteration 2 - US-002: Create CLI entrypoint and command router
+- **Date**: 2026-02-22
+- **Summary**: Created src/cli.ts using util.parseArgs to parse arguments and dispatch to subcommands (infra, index, mcp, help, version). Unknown commands print usage to stderr and exit 2. --help works on root and each subcommand. --version prints package version. Subcommands infra/index/mcp are stubbed. Added 14 unit tests covering all acceptance criteria.
+- **TypeScript**: Compiles without errors
+- **Tests**: 19/19 passing (14 new + 5 existing)
