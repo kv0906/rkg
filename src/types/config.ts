@@ -1,14 +1,14 @@
 /**
- * RGK configuration interfaces.
+ * RKG configuration interfaces.
  *
  * Env var names:
- *   RGK_CONFIG           - path to config file (default: rgk.config.json)
- *   RGK_NEO4J_URI        - Neo4j connection URI
- *   RGK_NEO4J_USER       - Neo4j username
- *   RGK_NEO4J_PASSWORD   - Neo4j password
- *   RGK_NEO4J_DATABASE   - Neo4j database name
+ *   RKG_CONFIG           - path to config file (default: rkg.config.json)
+ *   RKG_NEO4J_URI        - Neo4j connection URI
+ *   RKG_NEO4J_USER       - Neo4j username
+ *   RKG_NEO4J_PASSWORD   - Neo4j password
+ *   RKG_NEO4J_DATABASE   - Neo4j database name
  *
- * Default config file: rgk.config.json
+ * Default config file: rkg.config.json
  */
 
 export interface Neo4jConfig {
@@ -37,19 +37,19 @@ export interface ClassificationConfig {
   rules?: ClassificationRule[];
 }
 
-export interface RgkConfig {
+export interface RkgConfig {
   neo4j: Neo4jConfig;
   indexing: IndexingConfig;
   classification: ClassificationConfig;
 }
 
-export const DEFAULT_CONFIG_FILE = 'rgk.config.json';
+export const DEFAULT_CONFIG_FILE = 'rkg.config.json';
 export const LEGACY_CONFIG_FILE = 'graph-config.json';
 
-export const RGK_ENV = {
-  CONFIG: 'RGK_CONFIG',
-  NEO4J_URI: 'RGK_NEO4J_URI',
-  NEO4J_USER: 'RGK_NEO4J_USER',
-  NEO4J_PASSWORD: 'RGK_NEO4J_PASSWORD',
-  NEO4J_DATABASE: 'RGK_NEO4J_DATABASE',
+export const RKG_ENV = {
+  CONFIG: 'RKG_CONFIG',
+  NEO4J_URI: 'RKG_NEO4J_URI',
+  NEO4J_USER: 'RKG_NEO4J_USER',
+  NEO4J_PASSWORD: 'RKG_NEO4J_PASSWORD',
+  NEO4J_DATABASE: 'RKG_NEO4J_DATABASE',
 } as const;

@@ -4,14 +4,15 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
+import { fileURLToPath } from 'node:url';
 import { loadConfig, toGraphConfig } from './config.js';
 import { initDatabase, query, closeDatabase } from './db.js';
 import { runIndex } from './core/index-service.js';
 import type { GraphConfig, ToolResponse, PropInfo } from './types.js';
-import type { RgkConfig } from './types/config.js';
+import type { RkgConfig } from './types/config.js';
 
 let config: GraphConfig;
-let rgkConfig: RgkConfig;
+let rkgConfig: RkgConfig;
 
 function safeJsonParse<T>(str: unknown, fallback: T): T {
   if (typeof str !== 'string') return fallback;
@@ -28,6 +29,89 @@ function error(msg: string, suggestion?: string): { content: { type: 'text'; tex
   return { content: [{ type: 'text', text: JSON.stringify(response, null, 2) }], isError: true };
 }
 
+interface ParsedComponentIdentifier {
+  componentName: string;
+  filePath?: string;
+}
+
+interface ComponentLookupRow {
+  name: string;
+  filePath: string;
+  layer: string;
+}
+
+function normalizeComponentPath(filePath: string): string {
+  return filePath.replace(/\\/g, '/').replace(/^\.\/+/, '').trim();
+}
+
+export function parseComponentIdentifier(identifier: string): ParsedComponentIdentifier {
+  const raw = identifier.trim();
+  const lastColon = raw.lastIndexOf(':');
+  if (lastColon <= 0 || lastColon === raw.length - 1) {
+    return { componentName: raw };
+  }
+
+  const filePath = raw.slice(0, lastColon).trim();
+  const componentName = raw.slice(lastColon + 1).trim();
+  if (!filePath || !componentName) {
+    return { componentName: raw };
+  }
+
+  return { filePath, componentName };
+}
+
+async function resolveComponentLookup(
+  rawIdentifier: string,
+  db?: string
+): Promise<{ identifier: ParsedComponentIdentifier; matches: ComponentLookupRow[] } | ReturnType<typeof error>> {
+  const identifier = parseComponentIdentifier(rawIdentifier);
+  const rawRows = await query(`
+    MATCH (c:Component)
+    WHERE toLower(c.name) = toLower($name)
+    RETURN c.name AS name, c.filePath AS filePath, c.layer AS layer
+    ORDER BY c.filePath
+  `, { name: identifier.componentName }, db);
+
+  const rows: ComponentLookupRow[] = rawRows
+    .filter(row =>
+      typeof row.name === 'string' &&
+      typeof row.filePath === 'string' &&
+      typeof row.layer === 'string'
+    )
+    .map(row => ({
+      name: row.name as string,
+      filePath: row.filePath as string,
+      layer: row.layer as string,
+    }));
+
+  if (!rows || rows.length === 0) {
+    return error(
+      `Component "${rawIdentifier}" not found`,
+      'Try get_graph_summary to see available components, or reindex_codebase if the component was recently added.'
+    );
+  }
+
+  if (!identifier.filePath) {
+    return { identifier, matches: rows };
+  }
+
+  const expected = normalizeComponentPath(identifier.filePath).toLowerCase();
+  const exactMatches = rows.filter(row => normalizeComponentPath(row.filePath).toLowerCase() === expected);
+  if (exactMatches.length > 0) {
+    return { identifier, matches: exactMatches };
+  }
+
+  const suggestions = rows
+    .slice(0, 5)
+    .map(row => `${row.filePath}:${row.name}`)
+    .join(', ');
+
+  return error(
+    `Component "${rawIdentifier}" not found`,
+    `No component matched that file path. Try one of: ${suggestions}`
+  );
+}
+
 const TOOLS = [
   {
     name: 'reindex_codebase',
@@ -36,22 +120,22 @@ const TOOLS = [
   },
   {
     name: 'get_component_info',
-    description: 'Get detailed information about a component by name, including its layer, export type, state usage, and dependency/dependent counts.',
+    description: 'Get detailed information about components. Accepts a component name (returns all matches) or filePath:componentName for an exact match.',
     inputSchema: {
       type: 'object' as const,
       properties: {
-        componentName: { type: 'string', description: 'Component name (case-insensitive)' },
+        componentName: { type: 'string', description: 'Component name (case-insensitive), or filePath:componentName for exact lookup' },
       },
       required: ['componentName'],
     },
   },
   {
     name: 'get_component_dependencies',
-    description: 'Get the components that a given component imports/depends on. Use depth=1 for immediate dependencies or depth=0 for the full recursive tree.',
+    description: 'Get imported dependencies for matching components. Accepts component name (all matches) or filePath:componentName (exact).',
     inputSchema: {
       type: 'object' as const,
       properties: {
-        componentName: { type: 'string', description: 'Component name (case-insensitive)' },
+        componentName: { type: 'string', description: 'Component name (case-insensitive), or filePath:componentName for exact lookup' },
         depth: { type: 'number', description: 'Traversal depth. 1=immediate (default), 0=full recursive tree' },
       },
       required: ['componentName'],
@@ -59,11 +143,11 @@ const TOOLS = [
   },
   {
     name: 'get_component_dependents',
-    description: 'Get the components that depend on/import a given component. Shows the blast radius of changes.',
+    description: 'Get dependents for matching components. Accepts component name (all matches) or filePath:componentName (exact).',
     inputSchema: {
       type: 'object' as const,
       properties: {
-        componentName: { type: 'string', description: 'Component name (case-insensitive)' },
+        componentName: { type: 'string', description: 'Component name (case-insensitive), or filePath:componentName for exact lookup' },
         depth: { type: 'number', description: 'Traversal depth. 1=immediate (default), 0=full recursive tree' },
       },
       required: ['componentName'],
@@ -116,11 +200,12 @@ const TOOLS = [
   },
   {
     name: 'get_change_impact',
-    description: 'Analyze the blast radius of changing a component. Shows direct dependents, transitive dependents, affected pages, layers, and a risk assessment.',
+    description: 'Analyze blast radius for matching components. Accepts component name (all matches) or filePath:componentName (exact). Use limit to cap results for high-fan-in components.',
     inputSchema: {
       type: 'object' as const,
       properties: {
-        componentName: { type: 'string', description: 'Component name (case-insensitive)' },
+        componentName: { type: 'string', description: 'Component name (case-insensitive), or filePath:componentName for exact lookup' },
+        limit: { type: 'number', description: 'Max dependents to return per category (default 50). Use 0 for unlimited.' },
       },
       required: ['componentName'],
     },
@@ -157,7 +242,7 @@ const TOOLS = [
 
 async function handleReindex(): Promise<ReturnType<typeof success>> {
   const start = Date.now();
-  const result = await runIndex({ config: rgkConfig });
+  const result = await runIndex({ config: rkgConfig });
   const elapsed_ms = Date.now() - start;
   return success(
     {
@@ -174,40 +259,34 @@ async function handleReindex(): Promise<ReturnType<typeof success>> {
 async function handleGetComponentInfo(args: { componentName: string }) {
   const start = Date.now();
   const db = config.neo4j.database;
-  const rows = await query(`
-    MATCH (c:Component)
-    WHERE toLower(c.name) = toLower($name)
-    OPTIONAL MATCH (c)-[:DEPENDS_ON]->(dep:Component)
-    WITH c, count(DISTINCT dep) AS dependencyCount
-    OPTIONAL MATCH (parent:Component)-[:DEPENDS_ON]->(c)
-    RETURN c.name AS name, c.filePath AS filePath, c.layer AS layer,
-           c.exportType AS exportType, c.hasState AS hasState,
-           c.props AS props, c.description AS description, c.hooks AS hooks,
-           dependencyCount,
-           count(DISTINCT parent) AS dependentCount
-  `, { name: args.componentName }, db);
 
-  if (!rows || rows.length === 0) {
-    return error(`Component "${args.componentName}" not found`, 'Try get_graph_summary to see available components, or reindex_codebase if the component was recently added.');
-  }
+  const lookup = await resolveComponentLookup(args.componentName, db);
+  if ('isError' in lookup) return lookup;
+
+  const rows = await Promise.all(lookup.matches.map(async (match) => {
+    const result = await query(`
+      MATCH (c:Component)
+      WHERE c.name = $name AND c.filePath = $filePath
+      OPTIONAL MATCH (c)-[:DEPENDS_ON]->(dep:Component)
+      WITH c, count(DISTINCT dep) AS dependencyCount
+      OPTIONAL MATCH (parent:Component)-[:DEPENDS_ON]->(c)
+      RETURN c.name AS name, c.filePath AS filePath, c.layer AS layer,
+             c.exportType AS exportType, c.hasState AS hasState,
+             c.props AS props, c.description AS description, c.hooks AS hooks,
+             dependencyCount,
+             count(DISTINCT parent) AS dependentCount
+    `, { name: match.name, filePath: match.filePath }, db);
+    return result[0];
+  }));
+
   // Parse JSON-stored fields
-  const enriched = rows.map(row => ({
+  const enriched = rows.filter(Boolean).map(row => ({
     ...row,
     props: safeJsonParse<PropInfo[]>(row.props, []),
     hooks: safeJsonParse<string[]>(row.hooks, []),
   }));
-  return success(enriched, Date.now() - start);
-}
 
-async function assertComponentExists(name: string, db?: string) {
-  const exists = await query(
-    'MATCH (c:Component) WHERE toLower(c.name) = toLower($name) RETURN c.name LIMIT 1',
-    { name }, db
-  );
-  if (!exists || exists.length === 0) {
-    return error(`Component "${name}" not found`, 'Try get_graph_summary to see available components, or reindex_codebase if the component was recently added.');
-  }
-  return null;
+  return success(enriched, Date.now() - start);
 }
 
 async function handleGetComponentDependencies(args: { componentName: string; depth?: number }) {
@@ -215,26 +294,36 @@ async function handleGetComponentDependencies(args: { componentName: string; dep
   const depth = args.depth ?? 1;
   const db = config.neo4j.database;
 
-  const notFound = await assertComponentExists(args.componentName, db);
-  if (notFound) return notFound;
+  const lookup = await resolveComponentLookup(args.componentName, db);
+  if ('isError' in lookup) return lookup;
 
-  let cypher: string;
-  if (depth === 0) {
-    cypher = `
+  const dependencyQuery = depth === 0
+    ? `
       MATCH (c:Component)
-      WHERE toLower(c.name) = toLower($name)
+      WHERE c.name = $name AND c.filePath = $filePath
       MATCH (c)-[:DEPENDS_ON*1..]->(dep:Component)
       RETURN DISTINCT dep.name AS name, dep.filePath AS filePath, dep.layer AS layer
-    `;
-  } else {
-    cypher = `
+      ORDER BY dep.filePath
+    `
+    : `
       MATCH (c:Component)-[:DEPENDS_ON]->(dep:Component)
-      WHERE toLower(c.name) = toLower($name)
+      WHERE c.name = $name AND c.filePath = $filePath
       RETURN dep.name AS name, dep.filePath AS filePath, dep.layer AS layer
+      ORDER BY dep.filePath
     `;
-  }
 
-  const rows = await query(cypher, { name: args.componentName }, db);
+  const rows = await Promise.all(lookup.matches.map(async (match) => {
+    const dependencies = await query(dependencyQuery, { name: match.name, filePath: match.filePath }, db);
+    return {
+      component: {
+        name: match.name,
+        filePath: match.filePath,
+        layer: match.layer,
+      },
+      dependencies,
+    };
+  }));
+
   return success(rows, Date.now() - start);
 }
 
@@ -243,26 +332,36 @@ async function handleGetComponentDependents(args: { componentName: string; depth
   const depth = args.depth ?? 1;
   const db = config.neo4j.database;
 
-  const notFound = await assertComponentExists(args.componentName, db);
-  if (notFound) return notFound;
+  const lookup = await resolveComponentLookup(args.componentName, db);
+  if ('isError' in lookup) return lookup;
 
-  let cypher: string;
-  if (depth === 0) {
-    cypher = `
+  const dependentsQuery = depth === 0
+    ? `
       MATCH (c:Component)
-      WHERE toLower(c.name) = toLower($name)
+      WHERE c.name = $name AND c.filePath = $filePath
       MATCH (parent:Component)-[:DEPENDS_ON*1..]->(c)
       RETURN DISTINCT parent.name AS name, parent.filePath AS filePath, parent.layer AS layer
-    `;
-  } else {
-    cypher = `
+      ORDER BY parent.filePath
+    `
+    : `
       MATCH (parent:Component)-[:DEPENDS_ON]->(c:Component)
-      WHERE toLower(c.name) = toLower($name)
+      WHERE c.name = $name AND c.filePath = $filePath
       RETURN parent.name AS name, parent.filePath AS filePath, parent.layer AS layer
+      ORDER BY parent.filePath
     `;
-  }
 
-  const rows = await query(cypher, { name: args.componentName }, db);
+  const rows = await Promise.all(lookup.matches.map(async (match) => {
+    const dependents = await query(dependentsQuery, { name: match.name, filePath: match.filePath }, db);
+    return {
+      component: {
+        name: match.name,
+        filePath: match.filePath,
+        layer: match.layer,
+      },
+      dependents,
+    };
+  }));
+
   return success(rows, Date.now() - start);
 }
 
@@ -282,7 +381,7 @@ async function handleGetGraphSummary() {
   const start = Date.now();
   const db = config.neo4j.database;
 
-  const [layerBreakdown, totalComponents, totalEdges, mostDependedOn, mostDependencies] = await Promise.all([
+  const [layerBreakdown, totalComponents, totalEdges, mostDependedOn, mostDependencies, orphanCount, duplicateNames] = await Promise.all([
     query(`
       MATCH (c:Component)
       RETURN c.layer AS layer, count(*) AS count
@@ -302,6 +401,18 @@ async function handleGetGraphSummary() {
       ORDER BY dependencyCount DESC
       LIMIT 10
     `, {}, db),
+    query(`
+      MATCH (c:Component)
+      WHERE NOT (c)-[:DEPENDS_ON]-() AND NOT ()-[:DEPENDS_ON]->(c)
+      RETURN count(c) AS count
+    `, {}, db),
+    query(`
+      MATCH (c:Component)
+      WITH c.name AS name, count(*) AS cnt, collect(c.filePath) AS files
+      WHERE cnt > 1
+      RETURN name, cnt AS count, files
+      ORDER BY cnt DESC
+    `, {}, db),
   ]);
 
   return success({
@@ -310,6 +421,8 @@ async function handleGetGraphSummary() {
     totalEdges,
     mostDependedOn,
     mostDependencies,
+    orphanComponents: orphanCount[0]?.count ?? 0,
+    duplicateNames: duplicateNames.length > 0 ? duplicateNames : undefined,
   }, Date.now() - start);
 }
 
@@ -436,78 +549,90 @@ async function handleSearchComponents(args: {
   return success(results, Date.now() - start);
 }
 
-async function handleGetChangeImpact(args: { componentName: string }) {
+async function handleGetChangeImpact(args: { componentName: string; limit?: number }) {
   const start = Date.now();
   const db = config.neo4j.database;
+  const limit = args.limit === 0 ? Infinity : (args.limit ?? 50);
 
-  const notFound = await assertComponentExists(args.componentName, db);
-  if (notFound) return notFound;
+  const lookup = await resolveComponentLookup(args.componentName, db);
+  if ('isError' in lookup) return lookup;
 
-  // 4 parallel queries
-  const [componentRows, directRows, transitiveRows, pageRows] = await Promise.all([
-    // Component info
-    query(`
-      MATCH (c:Component)
-      WHERE toLower(c.name) = toLower($name)
-      RETURN c.name AS name, c.filePath AS filePath, c.layer AS layer,
-             c.props AS props, c.description AS description, c.hooks AS hooks
-    `, { name: args.componentName }, db),
-    // Direct dependents
-    query(`
-      MATCH (parent:Component)-[:DEPENDS_ON]->(c:Component)
-      WHERE toLower(c.name) = toLower($name)
-      RETURN parent.name AS name, parent.filePath AS filePath, parent.layer AS layer
-    `, { name: args.componentName }, db),
-    // Transitive dependents
-    query(`
-      MATCH (c:Component)
-      WHERE toLower(c.name) = toLower($name)
-      MATCH (parent:Component)-[:DEPENDS_ON*1..]->(c)
-      RETURN DISTINCT parent.name AS name, parent.filePath AS filePath, parent.layer AS layer
-    `, { name: args.componentName }, db),
-    // Affected pages
-    query(`
-      MATCH (c:Component)
-      WHERE toLower(c.name) = toLower($name)
-      MATCH (page:Component)-[:DEPENDS_ON*1..]->(c)
-      WHERE page.layer = 'page'
-      RETURN DISTINCT page.name AS name, page.filePath AS filePath
-    `, { name: args.componentName }, db),
-  ]);
+  const impactRows = await Promise.all(lookup.matches.map(async (match) => {
+    const [componentRows, directRows, transitiveRows, pageRows] = await Promise.all([
+      query(`
+        MATCH (c:Component)
+        WHERE c.name = $name AND c.filePath = $filePath
+        RETURN c.name AS name, c.filePath AS filePath, c.layer AS layer,
+               c.props AS props, c.description AS description, c.hooks AS hooks
+      `, { name: match.name, filePath: match.filePath }, db),
+      query(`
+        MATCH (parent:Component)-[:DEPENDS_ON]->(c:Component)
+        WHERE c.name = $name AND c.filePath = $filePath
+        RETURN parent.name AS name, parent.filePath AS filePath, parent.layer AS layer
+      `, { name: match.name, filePath: match.filePath }, db),
+      query(`
+        MATCH (c:Component)
+        WHERE c.name = $name AND c.filePath = $filePath
+        MATCH (parent:Component)-[:DEPENDS_ON*1..]->(c)
+        RETURN DISTINCT parent.name AS name, parent.filePath AS filePath, parent.layer AS layer
+      `, { name: match.name, filePath: match.filePath }, db),
+      query(`
+        MATCH (c:Component)
+        WHERE c.name = $name AND c.filePath = $filePath
+        MATCH (page:Component)-[:DEPENDS_ON*1..]->(c)
+        WHERE page.layer = 'page'
+        RETURN DISTINCT page.name AS name, page.filePath AS filePath
+      `, { name: match.name, filePath: match.filePath }, db),
+    ]);
 
-  const comp = componentRows[0];
-  const affectedLayers = [...new Set(transitiveRows.map(r => r.layer as string))];
+    const comp = componentRows[0];
+    const affectedLayers = [...new Set(transitiveRows.map(r => r.layer as string))];
 
-  // Risk assessment
-  const directCount = directRows.length;
-  const transitiveCount = transitiveRows.length;
-  const pageCount = pageRows.length;
-  let risk: 'low' | 'medium' | 'high';
-  let riskReason: string;
+    const directCount = directRows.length;
+    const transitiveCount = transitiveRows.length;
+    const pageCount = pageRows.length;
+    let risk: 'low' | 'medium' | 'high';
+    let riskReason: string;
 
-  if (transitiveCount >= 5 || pageCount >= 2) {
-    risk = 'high';
-    riskReason = `${transitiveCount} transitive dependents across ${pageCount} page(s)`;
-  } else if (transitiveCount >= 2 || pageCount >= 1) {
-    risk = 'medium';
-    riskReason = `${transitiveCount} transitive dependents, ${pageCount} page(s) affected`;
-  } else {
-    risk = 'low';
-    riskReason = `${directCount} direct dependent(s), limited blast radius`;
-  }
+    if (transitiveCount >= 5 || pageCount >= 2) {
+      risk = 'high';
+      riskReason = `${transitiveCount} transitive dependents across ${pageCount} page(s)`;
+    } else if (transitiveCount >= 2 || pageCount >= 1) {
+      risk = 'medium';
+      riskReason = `${transitiveCount} transitive dependents, ${pageCount} page(s) affected`;
+    } else {
+      risk = 'low';
+      riskReason = `${directCount} direct dependent(s), limited blast radius`;
+    }
 
-  return success({
-    component: {
-      ...comp,
-      props: safeJsonParse<PropInfo[]>(comp.props, []),
-      hooks: safeJsonParse<string[]>(comp.hooks, []),
-    },
-    directDependents: directRows,
-    transitiveDependents: transitiveRows,
-    affectedPages: pageRows,
-    affectedLayers,
-    summary: { risk, riskReason },
-  }, Date.now() - start);
+    const truncatedDirect = directRows.slice(0, limit);
+    const truncatedTransitive = transitiveRows.slice(0, limit);
+    const truncatedPages = pageRows.slice(0, limit);
+
+    return {
+      component: {
+        ...comp,
+        props: safeJsonParse<PropInfo[]>(comp?.props, []),
+        hooks: safeJsonParse<string[]>(comp?.hooks, []),
+      },
+      directDependents: truncatedDirect,
+      transitiveDependents: truncatedTransitive,
+      affectedPages: truncatedPages,
+      affectedLayers,
+      summary: {
+        risk,
+        riskReason,
+        totalDirectDependents: directCount,
+        totalTransitiveDependents: transitiveCount,
+        totalAffectedPages: pageCount,
+        ...(directCount > limit || transitiveCount > limit || pageCount > limit
+          ? { truncated: true, limit }
+          : {}),
+      },
+    };
+  }));
+
+  return success(impactRows, Date.now() - start);
 }
 
 async function handleGetModuleContents(args: { path: string; depth?: number }) {
@@ -596,10 +721,10 @@ async function handleExecuteCypher(args: { query: string }) {
   }
 }
 
-async function main() {
+export async function main() {
   // Load configuration
-  rgkConfig = loadConfig();
-  config = toGraphConfig(rgkConfig);
+  rkgConfig = loadConfig();
+  config = toGraphConfig(rkgConfig);
 
   // Initialize Neo4j connection
   await initDatabase(config.neo4j);
@@ -609,7 +734,7 @@ async function main() {
   const total = (countResult[0]?.total as number) ?? 0;
   if (total === 0) {
     console.error('[react-graph] No graph data found. Auto-indexing...');
-    const result = await runIndex({ config: rgkConfig });
+    const result = await runIndex({ config: rkgConfig });
     console.error(`[react-graph] Indexed ${result.nodeCount} components, ${result.edgeCount} dependencies.`);
   } else {
     console.error(`[react-graph] Graph loaded: ${total} components.`);
@@ -646,7 +771,7 @@ async function main() {
       case 'search_components':
         return handleSearchComponents(args as { namePattern?: string; layer?: string; hasState?: boolean; hooks?: string[]; propNames?: string[]; exportType?: string });
       case 'get_change_impact':
-        return handleGetChangeImpact(args as { componentName: string });
+        return handleGetChangeImpact(args as { componentName: string; limit?: number });
       case 'get_module_contents':
         return handleGetModuleContents(args as { path: string; depth?: number });
       case 'get_layer_summary':
@@ -669,7 +794,14 @@ async function main() {
   console.error('[react-graph] MCP server running on STDIO (Neo4j backend).');
 }
 
-main().catch((e) => {
-  console.error('[react-graph] Fatal error:', e);
-  process.exit(1);
-});
+// Only auto-start when run directly (not when imported by CLI)
+import { realpathSync } from 'node:fs';
+const _resolvedArg1 = process.argv[1] ? realpathSync(process.argv[1]) : '';
+const _isDirectRun = _resolvedArg1 === fileURLToPath(import.meta.url);
+
+if (_isDirectRun) {
+  main().catch((e) => {
+    console.error('[react-graph] Fatal error:', e);
+    process.exit(1);
+  });
+}

@@ -1,8 +1,8 @@
 import { readFileSync, existsSync } from 'fs';
 import { resolve, dirname } from 'path';
 import type { GraphConfig } from './types.js';
-import type { RgkConfig, Neo4jConfig } from './types/config.js';
-import { DEFAULT_CONFIG_FILE, LEGACY_CONFIG_FILE, RGK_ENV } from './types/config.js';
+import type { RkgConfig, Neo4jConfig } from './types/config.js';
+import { DEFAULT_CONFIG_FILE, LEGACY_CONFIG_FILE, RKG_ENV } from './types/config.js';
 
 const LEGACY_ENV = {
   CONFIG: 'REACT_GRAPH_CONFIG',
@@ -13,11 +13,11 @@ const LEGACY_ENV = {
 } as const;
 
 const DEPRECATION_MAP: Record<string, string> = {
-  [LEGACY_ENV.CONFIG]: RGK_ENV.CONFIG,
-  [LEGACY_ENV.NEO4J_URI]: RGK_ENV.NEO4J_URI,
-  [LEGACY_ENV.NEO4J_USER]: RGK_ENV.NEO4J_USER,
-  [LEGACY_ENV.NEO4J_PASSWORD]: RGK_ENV.NEO4J_PASSWORD,
-  [LEGACY_ENV.NEO4J_DATABASE]: RGK_ENV.NEO4J_DATABASE,
+  [LEGACY_ENV.CONFIG]: RKG_ENV.CONFIG,
+  [LEGACY_ENV.NEO4J_URI]: RKG_ENV.NEO4J_URI,
+  [LEGACY_ENV.NEO4J_USER]: RKG_ENV.NEO4J_USER,
+  [LEGACY_ENV.NEO4J_PASSWORD]: RKG_ENV.NEO4J_PASSWORD,
+  [LEGACY_ENV.NEO4J_DATABASE]: RKG_ENV.NEO4J_DATABASE,
 };
 
 const DEFAULT_NEO4J: Neo4jConfig = {
@@ -29,7 +29,7 @@ const DEFAULT_NEO4J: Neo4jConfig = {
 
 /**
  * Read an env var with deprecation fallback.
- * Checks new RGK_ name first, falls back to legacy name with stderr warning.
+ * Checks new RKG_ name first, falls back to legacy name with stderr warning.
  */
 function envWithDeprecation(
   newName: string,
@@ -44,7 +44,7 @@ function envWithDeprecation(
   }
   if (oldVal !== undefined) {
     warnings.push(
-      `[rgk] Deprecation: env var ${oldName} is deprecated. Use ${DEPRECATION_MAP[oldName]} instead.`,
+      `[rkg] Deprecation: env var ${oldName} is deprecated. Use ${DEPRECATION_MAP[oldName]} instead.`,
     );
     return oldVal;
   }
@@ -53,7 +53,7 @@ function envWithDeprecation(
 
 /**
  * Resolve config file path.
- * Priority: configPath arg > RGK_CONFIG env > REACT_GRAPH_CONFIG env > rgk.config.json > graph-config.json
+ * Priority: configPath arg > RKG_CONFIG env > REACT_GRAPH_CONFIG env > rkg.config.json > graph-config.json
  */
 function resolveConfigPath(
   configPath: string | undefined,
@@ -64,17 +64,17 @@ function resolveConfigPath(
     return resolve(configPath);
   }
 
-  // RGK_CONFIG env var (new)
-  const rgkConfig = process.env[RGK_ENV.CONFIG];
-  if (rgkConfig) {
-    return resolve(rgkConfig);
+  // RKG_CONFIG env var (new)
+  const rkgConfig = process.env[RKG_ENV.CONFIG];
+  if (rkgConfig) {
+    return resolve(rkgConfig);
   }
 
   // REACT_GRAPH_CONFIG env var (legacy)
   const legacyConfig = process.env[LEGACY_ENV.CONFIG];
   if (legacyConfig) {
     warnings.push(
-      `[rgk] Deprecation: env var ${LEGACY_ENV.CONFIG} is deprecated. Use ${RGK_ENV.CONFIG} instead.`,
+      `[rkg] Deprecation: env var ${LEGACY_ENV.CONFIG} is deprecated. Use ${RKG_ENV.CONFIG} instead.`,
     );
     return resolve(legacyConfig);
   }
@@ -88,7 +88,7 @@ function resolveConfigPath(
   const oldPath = resolve(LEGACY_CONFIG_FILE);
   if (existsSync(oldPath)) {
     warnings.push(
-      `[rgk] Deprecation: config file ${LEGACY_CONFIG_FILE} is deprecated. Rename to ${DEFAULT_CONFIG_FILE}.`,
+      `[rkg] Deprecation: config file ${LEGACY_CONFIG_FILE} is deprecated. Rename to ${DEFAULT_CONFIG_FILE}.`,
     );
     return oldPath;
   }
@@ -119,15 +119,15 @@ function parseConfigFile(absolutePath: string): {
 }
 
 /**
- * Build RgkConfig from a parsed config file, env vars, and defaults.
- * Precedence: CLI flags > RGK_ env vars > legacy env vars > config file > defaults
+ * Build RkgConfig from a parsed config file, env vars, and defaults.
+ * Precedence: CLI flags > RKG_ env vars > legacy env vars > config file > defaults
  */
 function buildConfig(
   raw: Record<string, unknown> | null,
   isLegacyFormat: boolean,
   configDir: string,
   warnings: string[],
-): RgkConfig {
+): RkgConfig {
   // Extract file-level values based on format
   let fileNeo4j: Partial<Neo4jConfig> = {};
   let fileSourceDir: string | undefined;
@@ -164,12 +164,12 @@ function buildConfig(
   // Neo4j config: env vars > config file > defaults
   const neo4j: Neo4jConfig = {
     uri:
-      envWithDeprecation(RGK_ENV.NEO4J_URI, LEGACY_ENV.NEO4J_URI, warnings) ||
+      envWithDeprecation(RKG_ENV.NEO4J_URI, LEGACY_ENV.NEO4J_URI, warnings) ||
       fileNeo4j.uri ||
       DEFAULT_NEO4J.uri,
     user:
       envWithDeprecation(
-        RGK_ENV.NEO4J_USER,
+        RKG_ENV.NEO4J_USER,
         LEGACY_ENV.NEO4J_USER,
         warnings,
       ) ||
@@ -177,7 +177,7 @@ function buildConfig(
       DEFAULT_NEO4J.user,
     password:
       envWithDeprecation(
-        RGK_ENV.NEO4J_PASSWORD,
+        RKG_ENV.NEO4J_PASSWORD,
         LEGACY_ENV.NEO4J_PASSWORD,
         warnings,
       ) ||
@@ -185,7 +185,7 @@ function buildConfig(
       DEFAULT_NEO4J.password,
     database:
       envWithDeprecation(
-        RGK_ENV.NEO4J_DATABASE,
+        RKG_ENV.NEO4J_DATABASE,
         LEGACY_ENV.NEO4J_DATABASE,
         warnings,
       ) ||
@@ -212,12 +212,12 @@ function buildConfig(
   };
 }
 
-export function loadConfig(configPath?: string): RgkConfig {
+export function loadConfig(configPath?: string): RkgConfig {
   const warnings: string[] = [];
 
   const resolvedPath = resolveConfigPath(configPath, warnings);
 
-  let config: RgkConfig;
+  let config: RkgConfig;
 
   if (resolvedPath && existsSync(resolvedPath)) {
     const { raw, isLegacyFormat } = parseConfigFile(resolvedPath);
@@ -240,15 +240,15 @@ export function loadConfig(configPath?: string): RgkConfig {
 }
 
 /**
- * Convert RgkConfig to legacy GraphConfig for backward compatibility.
+ * Convert RkgConfig to legacy GraphConfig for backward compatibility.
  */
-export function toGraphConfig(rgk: RgkConfig): GraphConfig {
+export function toGraphConfig(rkg: RkgConfig): GraphConfig {
   return {
-    sourceDir: rgk.indexing.sourceDir,
-    include: rgk.indexing.include,
-    exclude: rgk.indexing.exclude,
-    layerMapping: rgk.classification.layerMapping,
-    defaultLayer: rgk.classification.defaultLayer,
-    neo4j: rgk.neo4j,
+    sourceDir: rkg.indexing.sourceDir,
+    include: rkg.indexing.include,
+    exclude: rkg.indexing.exclude,
+    layerMapping: rkg.classification.layerMapping,
+    defaultLayer: rkg.classification.defaultLayer,
+    neo4j: rkg.neo4j,
   };
 }

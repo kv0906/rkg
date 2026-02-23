@@ -3,6 +3,30 @@ import { resolve, relative, dirname, basename } from 'path';
 import { existsSync } from 'fs';
 import type { GraphConfig, ParsedComponent, ParsedDependency, ParsedModule, ParseResult, PropInfo } from './types.js';
 
+const NON_COMPONENT_NAME_SUFFIXES = [
+  'Props',
+  'Config',
+  'Options',
+  'Context',
+  'Type',
+  'Schema',
+  'Api',
+  'Enum',
+  'State',
+  'Action',
+  'Reducer',
+];
+
+const NEXTJS_METADATA_FILES = new Set([
+  'sitemap',
+  'robots',
+  'opengraph-image',
+  'twitter-image',
+  'manifest',
+  'instrumentation',
+  'global-error',
+]);
+
 export function parseCodebase(config: GraphConfig): ParseResult {
   const project = new Project({
     tsConfigFilePath: findTsConfig(config.sourceDir),
@@ -32,13 +56,14 @@ export function parseCodebase(config: GraphConfig): ParseResult {
   for (const sourceFile of sourceFiles) {
     const filePath = relative(config.sourceDir, sourceFile.getFilePath());
     const fileName = basename(sourceFile.getFilePath(), sourceFile.getExtension());
+    const fileExtension = sourceFile.getExtension();
 
     if (isBarrelFile(sourceFile, fileName)) {
       barrelFiles.add(filePath);
       continue;
     }
 
-    const component = extractComponent(sourceFile, filePath, fileName, config);
+    const component = extractComponent(sourceFile, filePath, fileName, fileExtension, config);
     if (component) {
       componentFiles.set(filePath, component);
       components.push(component);
@@ -54,6 +79,9 @@ export function parseCodebase(config: GraphConfig): ParseResult {
     const deps = extractDependencies(sourceFile, config, barrelFiles, componentFiles, project);
     dependencies.push(...deps);
   }
+
+  // Reclassify layers using path heuristics and graph structure
+  reclassifyComponents(components, dependencies, config);
 
   const modules = deriveModules(components);
   const layers = deriveLayers(components);
@@ -85,6 +113,53 @@ function deriveModules(components: ParsedComponent[]): ParsedModule[] {
 
 function deriveLayers(components: ParsedComponent[]): string[] {
   return [...new Set(components.map(c => c.layer))];
+}
+
+/**
+ * Refine layer classification using path heuristics and dependency graph structure.
+ *
+ * Atoms: leaf components with zero fan-out (don't depend on other components).
+ * Molecules: compose a small number of other components (fan-out 1-3).
+ * Organisms: compose many components (fan-out > 3).
+ *
+ * Path override: components in ui/ or primitives/ directories are classified
+ * purely by fan-out, regardless of any prior mapping.
+ */
+export function reclassifyComponents(
+  components: ParsedComponent[],
+  dependencies: ParsedDependency[],
+  config: GraphConfig
+): void {
+  // Build fan-out map (how many components does this component import)
+  const fanOut = new Map<string, number>();
+  for (const dep of dependencies) {
+    fanOut.set(dep.sourceFile, (fanOut.get(dep.sourceFile) || 0) + 1);
+  }
+
+  for (const comp of components) {
+    // Never reclassify page or template — those come from App Router detection
+    if (comp.layer === 'page' || comp.layer === 'template') continue;
+
+    const segments = comp.filePath.toLowerCase().split('/');
+    const out = fanOut.get(comp.filePath) || 0;
+
+    // Path-based: ui/ and primitives/ directories are atomic design primitives
+    if (segments.includes('ui') || segments.includes('primitives')) {
+      comp.layer = classifyByFanOut(out);
+      continue;
+    }
+
+    // Only auto-classify components at the default layer (unknown/unmatched)
+    if (comp.layer !== config.defaultLayer) continue;
+
+    comp.layer = classifyByFanOut(out);
+  }
+}
+
+function classifyByFanOut(fanOut: number): string {
+  if (fanOut === 0) return 'atom';
+  if (fanOut <= 3) return 'molecule';
+  return 'organism';
 }
 
 function findTsConfig(sourceDir: string): string | undefined {
@@ -119,36 +194,43 @@ function extractComponent(
   sourceFile: SourceFile,
   filePath: string,
   fileName: string,
+  fileExtension: string,
   config: GraphConfig
 ): ParsedComponent | null {
+  if (isNonComponentFile(filePath, fileName, fileExtension, sourceFile.getFullText())) {
+    return null;
+  }
+
   let name: string | undefined;
   let exportType: 'default' | 'named' = 'named';
 
   // Check for default export
   const defaultExport = sourceFile.getDefaultExportSymbol();
   if (defaultExport) {
-    exportType = 'default';
-    // Try to get the name from the declaration
     const declarations = defaultExport.getDeclarations();
-    for (const decl of declarations) {
-      if (Node.isFunctionDeclaration(decl) || Node.isClassDeclaration(decl)) {
-        const declName = decl.getName();
-        if (declName) {
-          name = declName;
-          break;
+    if (!isTypeOnlyExport(declarations)) {
+      exportType = 'default';
+      // Try to get the name from the declaration
+      for (const decl of declarations) {
+        if (Node.isFunctionDeclaration(decl) || Node.isClassDeclaration(decl)) {
+          const declName = decl.getName();
+          if (declName) {
+            name = declName;
+            break;
+          }
+        }
+        if (Node.isExportAssignment(decl)) {
+          const expr = decl.getExpression();
+          if (Node.isIdentifier(expr)) {
+            name = expr.getText();
+            break;
+          }
         }
       }
-      if (Node.isExportAssignment(decl)) {
-        const expr = decl.getExpression();
-        if (Node.isIdentifier(expr)) {
-          name = expr.getText();
-          break;
-        }
+      // Fallback to PascalCase filename
+      if (!name) {
+        name = toPascalCase(fileName);
       }
-    }
-    // Fallback to PascalCase filename
-    if (!name) {
-      name = toPascalCase(fileName);
     }
   }
 
@@ -157,27 +239,26 @@ function extractComponent(
     const namedExports = sourceFile.getExportedDeclarations();
     if (namedExports.size === 0) return null;
 
-    // Pick the first exported function/class/variable that looks like a component (PascalCase)
-    for (const [exportName] of namedExports) {
+    // Pick the first non-type exported declaration that looks like a component (PascalCase).
+    for (const [exportName, declarations] of namedExports) {
       if (exportName === 'default') continue;
-      if (isPascalCase(exportName)) {
-        name = exportName;
-        exportType = 'named';
-        break;
-      }
-    }
-
-    // If no PascalCase export, use filename as name (for non-component files like helpers)
-    if (!name) {
-      const hasExports = Array.from(namedExports.keys()).some(k => k !== 'default');
-      if (hasExports) {
-        name = fileName;
-        exportType = 'named';
-      }
+      if (!isPascalCase(exportName)) continue;
+      if (isTypeOnlyExport(declarations)) continue;
+      if (isNonComponentName(exportName)) continue;
+      name = exportName;
+      exportType = 'named';
+      break;
     }
   }
 
   if (!name) return null;
+  if (isNonComponentName(name)) return null;
+
+  // Filter custom hooks (e.g., useNameCapitalization)
+  if (/^use[A-Z]/.test(name)) return null;
+
+  // Filter Error subclasses (e.g., AIError, OCRError)
+  if (isErrorClass(sourceFile, name)) return null;
 
   const layer = resolveLayer(filePath, config);
   const hasState = detectState(sourceFile);
@@ -188,12 +269,123 @@ function extractComponent(
   return { name, filePath, layer, exportType, hasState, props, description, hooks };
 }
 
-function resolveLayer(filePath: string, config: GraphConfig): string {
-  const segments = filePath.replace(/\\/g, '/').split('/').map(s => s.toLowerCase());
+export function hasJsxContent(fileText: string): boolean {
+  return /<[A-Za-z][^>]*>|<>/.test(fileText);
+}
 
-  for (const segment of segments) {
-    if (segment in config.layerMapping) {
-      return config.layerMapping[segment];
+export function isNonComponentFile(
+  filePath: string,
+  fileName: string,
+  fileExtension: string,
+  fileText: string
+): boolean {
+  if (fileName === 'route' || fileName === 'middleware') {
+    return true;
+  }
+
+  // Next.js metadata/special files are not components
+  if (NEXTJS_METADATA_FILES.has(fileName)) {
+    return true;
+  }
+
+  const normalizedPath = filePath.replace(/\\/g, '/');
+  if (normalizedPath.endsWith('.d.ts')) {
+    return true;
+  }
+
+  // .ts files (not .tsx) cannot contain JSX syntax; only include if they use
+  // React.createElement directly (very rare but valid)
+  if (fileExtension === '.ts' && !fileText.includes('React.createElement')) {
+    return true;
+  }
+
+  return false;
+}
+
+export function isTypeOnlyExport(declarations: Node[]): boolean {
+  if (declarations.length === 0) return false;
+  return declarations.every(decl =>
+    Node.isInterfaceDeclaration(decl) ||
+    Node.isTypeAliasDeclaration(decl) ||
+    Node.isEnumDeclaration(decl)
+  );
+}
+
+export function isNonComponentName(name: string): boolean {
+  if (!isPascalCase(name)) return false;
+  return NON_COMPONENT_NAME_SUFFIXES.some(suffix => name.endsWith(suffix));
+}
+
+function isErrorClass(sourceFile: SourceFile, name: string): boolean {
+  for (const cls of sourceFile.getClasses()) {
+    if (cls.getName() === name) {
+      const ext = cls.getExtends();
+      if (ext) {
+        const text = ext.getText();
+        // Matches Error, TypeError, CustomError, etc.
+        if (/Error\b/.test(text)) return true;
+      }
+    }
+  }
+  return false;
+}
+
+function matchesSegmentSequence(pathSegments: string[], keySegments: string[]): boolean {
+  if (keySegments.length === 0 || keySegments.length > pathSegments.length) return false;
+  for (let start = 0; start <= pathSegments.length - keySegments.length; start++) {
+    let matched = true;
+    for (let offset = 0; offset < keySegments.length; offset++) {
+      if (pathSegments[start + offset] !== keySegments[offset]) {
+        matched = false;
+        break;
+      }
+    }
+    if (matched) return true;
+  }
+  return false;
+}
+
+export function resolveLayer(filePath: string, config: GraphConfig): string {
+  const normalizedPath = filePath.replace(/\\/g, '/');
+  const segments = normalizedPath
+    .split('/')
+    .filter(Boolean)
+    .map(segment => segment.toLowerCase());
+
+  const sortedMappings = Object.entries(config.layerMapping)
+    .map(([rawKey, layer]) => ({
+      keySegments: rawKey
+        .replace(/\\/g, '/')
+        .split('/')
+        .filter(Boolean)
+        .map(segment => segment.toLowerCase()),
+      layer,
+    }))
+    .sort((a, b) => b.keySegments.length - a.keySegments.length);
+
+  for (const mapping of sortedMappings) {
+    if (matchesSegmentSequence(segments, mapping.keySegments)) {
+      return mapping.layer;
+    }
+  }
+
+  const appIndex = segments.indexOf('app');
+  if (appIndex !== -1) {
+    const lowerPath = normalizedPath.toLowerCase();
+    if (lowerPath.endsWith('/page.tsx') || lowerPath.endsWith('/page.jsx')) {
+      return 'page';
+    }
+    if (
+      lowerPath.endsWith('/layout.tsx') ||
+      lowerPath.endsWith('/layout.jsx') ||
+      lowerPath.endsWith('/loading.tsx') ||
+      lowerPath.endsWith('/loading.jsx') ||
+      lowerPath.endsWith('/error.tsx') ||
+      lowerPath.endsWith('/error.jsx') ||
+      lowerPath.endsWith('/not-found.tsx') ||
+      lowerPath.endsWith('/not-found.jsx')
+    ) {
+      return 'template';
     }
   }
 

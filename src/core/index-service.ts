@@ -7,14 +7,14 @@ import {
   ingestLayers,
 } from '../db.js';
 import { toGraphConfig } from '../config.js';
-import type { RgkConfig } from '../types/config.js';
+import type { RkgConfig } from '../types/config.js';
 import type { GraphConfig } from '../types.js';
 
 export interface IndexOptions {
   workspacePath?: string;
   configPath?: string;
   outputFormat?: 'human' | 'json';
-  config?: RgkConfig;
+  config?: RkgConfig;
 }
 
 export interface ClassificationSummary {
@@ -31,7 +31,7 @@ export interface IndexResult {
  * Run the indexing pipeline: parse workspace -> clear graph -> ingest nodes/edges -> return stats.
  */
 export async function runIndex(options: IndexOptions): Promise<IndexResult> {
-  // Build GraphConfig from RgkConfig or options
+  // Build GraphConfig from RkgConfig or options
   let graphConfig: GraphConfig;
 
   if (options.config) {

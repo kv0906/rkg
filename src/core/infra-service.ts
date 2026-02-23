@@ -52,7 +52,14 @@ export async function infraUp(options?: InfraUpOptions): Promise<void> {
       const report = await runDiagnostics();
       const neo4jCheck = report.checks.find(c => c.check === 'neo4j-connectivity');
       if (neo4jCheck?.status === 'pass') {
-        return;
+        // Connectivity is up — now check auth
+        const authCheck = report.checks.find(c => c.check === 'neo4j-auth');
+        if (authCheck?.status === 'pass') {
+          return;
+        }
+        if (authCheck?.status === 'fail' && (authCheck.message.includes('authentication') || authCheck.message.includes('Unauthorized') || authCheck.message.includes('credentials'))) {
+          throw new Error(`Neo4j authentication failed. Check your credentials.\nTry: rkg stop --volumes && rkg start`);
+        }
       }
       await new Promise(r => setTimeout(r, pollInterval));
     }

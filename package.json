@@ -1,11 +1,11 @@
 {
-  "name": "@rgk/react-knowledge-graph",
+  "name": "@rkg/react-knowledge-graph",
   "version": "1.0.0",
   "description": "CLI and MCP server for React/Next.js knowledge graph analysis",
   "type": "module",
   "main": "dist/src/index.js",
   "bin": {
-    "rgk": "dist/src/cli.js"
+    "rkg": "dist/src/cli.js"
   },
   "scripts": {
     "build": "tsc",

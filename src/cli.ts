@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 
 import { parseArgs } from 'node:util';
-import { readFileSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { infraUp, infraDown, infraStatus } from './core/infra-service.js';
 import { runIndex } from './core/index-service.js';
+import { initDatabase, closeDatabase } from './db.js';
 import { loadConfig } from './config.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -17,14 +18,15 @@ function getVersion(): string {
   return pkg.version;
 }
 
-const SUBCOMMANDS = ['infra', 'index', 'mcp', 'help', 'version'] as const;
+const SUBCOMMANDS = ['start', 'index', 'stop', 'infra', 'mcp', 'help', 'version'] as const;
 type Subcommand = (typeof SUBCOMMANDS)[number];
 
-const USAGE = `Usage: rgk <command> [options]
+const USAGE = `Usage: rkg <command> [options]
 
 Commands:
-  infra     Manage Neo4j infrastructure (up, down, status)
+  start     Start Neo4j (docker compose up, waits until ready)
   index     Index a React/Next.js codebase into the knowledge graph
+  stop      Stop Neo4j
   mcp       Start the MCP server or run diagnostics
   help      Show help for a command
   version   Print version
@@ -33,10 +35,24 @@ Options:
   --help     Show help
   --version  Print version
 
-Run "rgk help <command>" for more information about a command.`;
+Run "rkg help <command>" for more information about a command.`;
 
 const SUBCOMMAND_HELP: Record<Subcommand, string> = {
-  infra: `Usage: rgk infra <action> [options]
+  start: `Usage: rkg start [options]
+
+Start Neo4j via docker compose and wait until it's ready.
+
+Options:
+  --timeout <seconds>  Override wait timeout (default: 60)`,
+
+  stop: `Usage: rkg stop [options]
+
+Stop Neo4j.
+
+Options:
+  --volumes  Also remove data volumes`,
+
+  infra: `Usage: rkg infra <action> [options]
 
 Actions:
   up       Start Neo4j via docker compose
@@ -48,7 +64,7 @@ Options:
   --timeout <seconds> Override wait timeout (default: 60)
   --volumes           Also remove data volumes (with 'down')`,
 
-  index: `Usage: rgk index [workspacePath] [options]
+  index: `Usage: rkg index [workspacePath] [options]
 
 Index a React/Next.js codebase into the knowledge graph.
 
@@ -57,7 +73,7 @@ Options:
   --stats          Print summary (nodes, edges, classifications)
   --json           Output machine-readable JSON`,
 
-  mcp: `Usage: rgk mcp <action> [options]
+  mcp: `Usage: rkg mcp <action> [options]
 
 Actions:
   start    Launch MCP server over stdio
@@ -66,13 +82,13 @@ Actions:
 Options:
   --config <path>  Override config file location`,
 
-  help: `Usage: rgk help [command]
+  help: `Usage: rkg help [command]
 
 Show help for a command.`,
 
-  version: `Usage: rgk version
+  version: `Usage: rkg version
 
-Print the rgk version.`,
+Print the rkg version.`,
 };
 
 function printUsage(): void {
@@ -128,7 +144,7 @@ export function run(args: string[]): number | Promise<number> {
     return 0;
   }
 
-  // Check for --help on a subcommand: "rgk infra --help" or "rgk --help infra"
+  // Check for --help on a subcommand: "rkg infra --help" or "rkg --help infra"
   if (values.help && isSubcommand(command)) {
     printSubcommandHelp(command);
     return 0;
@@ -158,6 +174,12 @@ export function run(args: string[]): number | Promise<number> {
       return 0;
     }
 
+    case 'start':
+      return runStart(args);
+
+    case 'stop':
+      return runStop(args);
+
     case 'infra': {
       // Check for --help on subcommand args
       if (args.includes('--help')) {
@@ -175,15 +197,81 @@ export function run(args: string[]): number | Promise<number> {
       return runIndexCommand(positionals.slice(1), args);
     }
 
-    case 'mcp':
-      // Check for --help on subcommand args
+    case 'mcp': {
       if (args.includes('--help')) {
         printSubcommandHelp(command);
         return 0;
       }
-      // Stub: will be implemented in later user stories
-      console.error(`Command 'mcp' is not yet implemented.`);
-      return 1;
+      return runMcp(positionals.slice(1));
+    }
+  }
+}
+
+async function runStart(rawArgs: string[]): Promise<number> {
+  let startParsed: ReturnType<typeof parseArgs>;
+  try {
+    const startPos = rawArgs.indexOf('start');
+    const startArgs = startPos >= 0 ? rawArgs.slice(startPos + 1) : rawArgs;
+    startParsed = parseArgs({
+      args: startArgs,
+      options: {
+        timeout: { type: 'string' },
+      },
+      allowPositionals: true,
+      strict: false,
+    });
+  } catch {
+    console.error(SUBCOMMAND_HELP.start);
+    return 1;
+  }
+
+  const timeoutStr = startParsed.values.timeout as string | undefined;
+  const timeout = timeoutStr ? parseInt(timeoutStr, 10) : undefined;
+
+  if (timeoutStr !== undefined && (isNaN(timeout!) || timeout! <= 0)) {
+    console.error(`Invalid timeout value: ${timeoutStr}`);
+    return 1;
+  }
+
+  try {
+    console.log('Starting Neo4j via docker compose...');
+    await infraUp({ wait: true, timeout });
+    console.log('Neo4j is ready.');
+    return 0;
+  } catch (err) {
+    console.error(`Error: ${(err as Error).message}`);
+    return 1;
+  }
+}
+
+async function runStop(rawArgs: string[]): Promise<number> {
+  let stopParsed: ReturnType<typeof parseArgs>;
+  try {
+    const stopPos = rawArgs.indexOf('stop');
+    const stopArgs = stopPos >= 0 ? rawArgs.slice(stopPos + 1) : rawArgs;
+    stopParsed = parseArgs({
+      args: stopArgs,
+      options: {
+        volumes: { type: 'boolean', default: false },
+      },
+      allowPositionals: true,
+      strict: false,
+    });
+  } catch {
+    console.error(SUBCOMMAND_HELP.stop);
+    return 1;
+  }
+
+  const volumes = stopParsed.values.volumes as boolean;
+
+  try {
+    console.log(volumes ? 'Stopping Neo4j and removing volumes...' : 'Stopping Neo4j...');
+    infraDown({ volumes });
+    console.log('Neo4j stopped.');
+    return 0;
+  } catch (err) {
+    console.error(`Error: ${(err as Error).message}`);
+    return 1;
   }
 }
 
@@ -290,30 +378,73 @@ async function runIndexCommand(positionals: string[], rawArgs: string[]): Promis
   try {
     const config = loadConfig(configPath);
 
-    const result = await runIndex({
-      workspacePath,
-      configPath,
-      config,
-      outputFormat: jsonOutput ? 'json' : 'human',
-    });
+    await initDatabase(config.neo4j);
+    try {
+      const result = await runIndex({
+        workspacePath,
+        configPath,
+        config,
+        outputFormat: jsonOutput ? 'json' : 'human',
+      });
 
-    if (jsonOutput) {
-      console.log(JSON.stringify(result, null, 2));
-    } else if (showStats) {
-      console.log(`Nodes: ${result.nodeCount}`);
-      console.log(`Edges: ${result.edgeCount}`);
-      console.log('Classifications:');
-      for (const [layer, count] of Object.entries(result.classificationSummary)) {
-        console.log(`  ${layer}: ${count}`);
+      if (jsonOutput) {
+        console.log(JSON.stringify(result, null, 2));
+      } else if (showStats) {
+        console.log(`Nodes: ${result.nodeCount}`);
+        console.log(`Edges: ${result.edgeCount}`);
+        console.log('Classifications:');
+        for (const [layer, count] of Object.entries(result.classificationSummary)) {
+          console.log(`  ${layer}: ${count}`);
+        }
+      } else {
+        console.log(`Indexed ${result.nodeCount} components with ${result.edgeCount} dependencies.`);
+        for (const [layer, count] of Object.entries(result.classificationSummary)) {
+          console.log(`  ${layer}: ${count}`);
+        }
       }
-    } else {
-      console.log(`Indexed ${result.nodeCount} components with ${result.edgeCount} dependencies.`);
-      for (const [layer, count] of Object.entries(result.classificationSummary)) {
-        console.log(`  ${layer}: ${count}`);
-      }
+
+      return 0;
+    } finally {
+      await closeDatabase();
     }
+  } catch (err) {
+    console.error(`Error: ${(err as Error).message}`);
+    return 1;
+  }
+}
 
-    return 0;
+async function runMcp(positionals: string[]): Promise<number> {
+  const action = positionals[0];
+
+  if (!action || !['start', 'doctor'].includes(action)) {
+    console.error(action ? `Unknown mcp action: ${action}\n` : 'Missing mcp action.\n');
+    console.error(SUBCOMMAND_HELP.mcp);
+    return 1;
+  }
+
+  try {
+    switch (action) {
+      case 'start': {
+        const { main } = await import('./index.js');
+        await main();
+        await new Promise(() => {}); // keep alive until SIGINT/SIGTERM
+        return 0;
+      }
+
+      case 'doctor': {
+        const result = await infraStatus();
+        console.log(`Neo4j: ${result.running ? 'running' : 'stopped'}`);
+        console.log('');
+        for (const check of result.diagnostics.checks) {
+          const icon = check.status === 'pass' ? '[PASS]' : '[FAIL]';
+          console.log(`  ${icon} ${check.check}: ${check.message}`);
+        }
+        return 0;
+      }
+
+      default:
+        return 1;
+    }
   } catch (err) {
     console.error(`Error: ${(err as Error).message}`);
     return 1;
@@ -325,10 +456,8 @@ function isSubcommand(cmd: string): cmd is Subcommand {
 }
 
 // Main entrypoint - only runs when executed directly (not when imported for testing)
-const isDirectRun =
-  process.argv[1] &&
-  (process.argv[1] === fileURLToPath(import.meta.url) ||
-    process.argv[1].endsWith('/cli.js'));
+const resolvedArg1 = process.argv[1] ? realpathSync(process.argv[1]) : '';
+const isDirectRun = resolvedArg1 === fileURLToPath(import.meta.url);
 
 if (isDirectRun) {
   const mainArgs = process.argv.slice(2);
@@ -336,6 +465,6 @@ if (isDirectRun) {
   if (result instanceof Promise) {
     result.then(code => process.exit(code)).catch(() => process.exit(1));
   } else {
-    process.exit(result);
+    process.exitCode = result;
   }
 }

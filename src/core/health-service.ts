@@ -16,7 +16,7 @@ export interface DiagnosticReport {
 }
 
 /**
- * Check if a config file exists (rgk.config.json or graph-config.json).
+ * Check if a config file exists (rkg.config.json or graph-config.json).
  */
 function checkConfigFile(): DiagnosticCheck {
   const newPath = resolve(DEFAULT_CONFIG_FILE);
