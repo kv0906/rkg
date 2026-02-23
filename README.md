@@ -7,8 +7,12 @@ RKG parses your TypeScript/React source files, extracts components, props, hooks
 ## Quick Start
 
 ```bash
-# 1. Install
-npm install -g @rkg/react-knowledge-graph
+# 1. Clone and install
+git clone https://github.com/kv0906/rkg.git
+cd rkg
+npm install
+npm run build
+npm link            # makes `rkg` available globally
 
 # 2. Start Neo4j (requires Docker)
 rkg start
@@ -34,12 +38,14 @@ That's it. Your AI assistant can now query your component graph.
 ## Installation
 
 ```bash
-# Global install
-npm install -g @rkg/react-knowledge-graph
-
-# Or run directly with npx
-npx @rkg/react-knowledge-graph index ./src --stats
+git clone https://github.com/kv0906/rkg.git
+cd rkg
+npm install
+npm run build
+npm link
 ```
+
+This links the `rkg` binary globally so you can run it from any directory.
 
 ## Setup
 
@@ -99,6 +105,20 @@ RKG handles messy codebases gracefully — it indexes everything it can find and
 ### 3. Connect to your AI assistant (MCP)
 
 Add RKG as an MCP server in your AI tool's configuration:
+
+```json
+{
+  "mcpServers": {
+    "react-graph": {
+      "command": "node",
+      "args": ["/path/to/rkg/dist/src/cli.js", "mcp", "start"],
+      "cwd": "/path/to/your/react-project"
+    }
+  }
+}
+```
+
+Or if you ran `npm link`:
 
 ```json
 {
