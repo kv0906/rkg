@@ -6,9 +6,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 RKG (React Knowledge Graph) — a CLI tool and MCP server that parses React/Next.js codebases using ts-morph, builds a component dependency graph in Neo4j, and exposes it via MCP tools for AI-assisted code analysis.
 
-**Package**: `@rkg/react-knowledge-graph`
+**Package**: `@rkg/react-knowledge-graph` (not published — install locally via `git clone` + `npm link`)
 **CLI binary**: `rkg`
 **Runtime**: Node.js ≥ 20, ESM (`"type": "module"`)
+**Repo**: `https://github.com/kv0906/rkg.git`
+
+## Local Installation
+
+```bash
+git clone https://github.com/kv0906/rkg.git
+cd rkg
+npm install
+npm run build
+npm link            # makes `rkg` available globally
+```
 
 ## Build & Test Commands
 
