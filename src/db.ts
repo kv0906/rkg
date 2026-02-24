@@ -41,11 +41,26 @@ async function ensureSchema(database?: string): Promise<void> {
     {},
     { database }
   );
+  await d.executeQuery(
+    'CREATE CONSTRAINT hook_name IF NOT EXISTS FOR (h:Hook) REQUIRE h.name IS UNIQUE',
+    {},
+    { database }
+  );
+  await d.executeQuery(
+    `CREATE VECTOR INDEX component_embedding IF NOT EXISTS
+     FOR (c:Component) ON (c.embedding)
+     OPTIONS {indexConfig: {
+       \`vector.dimensions\`: 384,
+       \`vector.similarity_function\`: 'cosine'
+     }}`,
+    {},
+    { database }
+  );
 }
 
 export async function clearGraph(database?: string): Promise<void> {
   const d = getDriver();
-  await d.executeQuery('MATCH (n) WHERE n:Component OR n:Module OR n:Layer DETACH DELETE n', {}, { database });
+  await d.executeQuery('MATCH (n) WHERE n:Component OR n:Module OR n:Layer OR n:Prop OR n:Hook DETACH DELETE n', {}, { database });
 }
 
 export async function ingestComponents(
@@ -63,7 +78,8 @@ export async function ingestComponents(
          c.hasState = comp.hasState,
          c.props = comp.props,
          c.description = comp.description,
-         c.hooks = comp.hooks`,
+         c.hooks = comp.hooks,
+         c.embedding = comp.embedding`,
     {
       components: components.map(c => ({
         filePath: c.filePath,
@@ -74,6 +90,7 @@ export async function ingestComponents(
         props: JSON.stringify(c.props),
         description: c.description,
         hooks: JSON.stringify(c.hooks),
+        embedding: c.embedding ?? null,
       })),
     },
     { database }
@@ -202,6 +219,74 @@ export async function ingestLayers(
      MATCH (c:Component {filePath: e.filePath})
      MATCH (l:Layer {name: e.layer})
      MERGE (c)-[:BELONGS_TO_LAYER]->(l)`,
+    { edges },
+    { database }
+  );
+}
+
+export async function ingestProps(
+  components: ParsedComponent[],
+  database?: string
+): Promise<void> {
+  const d = getDriver();
+
+  const props = components.flatMap(c =>
+    c.props.map(p => ({
+      componentFilePath: c.filePath,
+      name: p.name,
+      type: p.type,
+      required: p.required,
+      defaultValue: p.defaultValue ?? null,
+    }))
+  );
+
+  if (props.length === 0) return;
+
+  await d.executeQuery(
+    `UNWIND $props AS p
+     MATCH (c:Component {filePath: p.componentFilePath})
+     CREATE (prop:Prop {
+       name: p.name,
+       type: p.type,
+       required: p.required,
+       defaultValue: p.defaultValue,
+       componentFilePath: p.componentFilePath
+     })
+     CREATE (c)-[:HAS_PROP]->(prop)`,
+    { props },
+    { database }
+  );
+}
+
+export async function ingestHooks(
+  components: ParsedComponent[],
+  database?: string
+): Promise<void> {
+  const d = getDriver();
+
+  const allHooks = [...new Set(components.flatMap(c => c.hooks))];
+  if (allHooks.length === 0) return;
+
+  // 1. MERGE shared Hook nodes
+  await d.executeQuery(
+    `UNWIND $hooks AS hookName
+     MERGE (h:Hook {name: hookName})`,
+    { hooks: allHooks },
+    { database }
+  );
+
+  // 2. Create USES_HOOK edges
+  const edges = components.flatMap(c =>
+    c.hooks.map(h => ({ filePath: c.filePath, hookName: h }))
+  );
+
+  if (edges.length === 0) return;
+
+  await d.executeQuery(
+    `UNWIND $edges AS e
+     MATCH (c:Component {filePath: e.filePath})
+     MATCH (h:Hook {name: e.hookName})
+     MERGE (c)-[:USES_HOOK]->(h)`,
     { edges },
     { database }
   );

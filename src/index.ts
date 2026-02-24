@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { loadConfig, toGraphConfig } from './config.js';
 import { initDatabase, query, closeDatabase } from './db.js';
 import { runIndex } from './core/index-service.js';
+import { generateEmbedding } from './core/embedding.js';
 import type { GraphConfig, ToolResponse, PropInfo } from './types.js';
 import type { RkgConfig } from './types/config.js';
 
@@ -228,8 +229,20 @@ const TOOLS = [
     inputSchema: { type: 'object' as const, properties: {}, required: [] as string[] },
   },
   {
+    name: 'semantic_search_components',
+    description: 'Find components by natural language description using semantic similarity. Use this when you want to search by intent or concept rather than exact names.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        query: { type: 'string', description: 'Natural language description of what you are looking for' },
+        limit: { type: 'number', description: 'Max results to return (default 10)' },
+      },
+      required: ['query'],
+    },
+  },
+  {
     name: 'execute_cypher',
-    description: 'Execute a read-only Cypher query against the component graph. Nodes: Component (filePath, name, layer, exportType, hasState, props, description, hooks), Module (path, name), Layer (name). Edges: DEPENDS_ON (importType), CONTAINS (Module→Module, Module→Component), BELONGS_TO_LAYER (Component→Layer).',
+    description: 'Execute a read-only Cypher query against the component graph. Nodes: Component (filePath, name, layer, exportType, hasState, props, description, hooks, embedding), Module (path, name), Layer (name), Prop (name, type, required, defaultValue, componentFilePath), Hook (name). Edges: DEPENDS_ON (importType), CONTAINS (Module→Module, Module→Component), BELONGS_TO_LAYER (Component→Layer), HAS_PROP (Component→Prop), USES_HOOK (Component→Hook).',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -279,12 +292,16 @@ async function handleGetComponentInfo(args: { componentName: string }) {
     return result[0];
   }));
 
-  // Parse JSON-stored fields
-  const enriched = rows.filter(Boolean).map(row => ({
-    ...row,
-    props: safeJsonParse<PropInfo[]>(row.props, []),
-    hooks: safeJsonParse<string[]>(row.hooks, []),
-  }));
+  // Parse JSON-stored fields; omit empty description
+  const enriched = rows.filter(Boolean).map(row => {
+    const { description, ...rest } = row;
+    return {
+      ...rest,
+      ...(description ? { description } : {}),
+      props: safeJsonParse<PropInfo[]>(row.props, []),
+      hooks: safeJsonParse<string[]>(row.hooks, []),
+    };
+  });
 
   return success(enriched, Date.now() - start);
 }
@@ -486,8 +503,71 @@ async function handleFindSimilarComponents(args: { query?: string; props?: strin
     };
   });
 
+  // Boost scores with embedding similarity if available
+  if (args.query) {
+    try {
+      const queryEmbedding = await generateEmbedding(args.query);
+      const embeddingRows = await query(`
+        CALL db.index.vector.queryNodes('component_embedding', 50, $embedding)
+        YIELD node, score
+        RETURN node.filePath AS filePath, score
+      `, { embedding: queryEmbedding }, db);
+
+      const embeddingScores = new Map<string, number>();
+      for (const row of embeddingRows) {
+        embeddingScores.set(row.filePath as string, row.score as number);
+      }
+
+      for (const item of scored) {
+        const embScore = embeddingScores.get(item.filePath as string);
+        if (embScore !== undefined && embScore > 0.3) {
+          item.score += Math.round(embScore * 3); // up to +3 bonus
+          item.reasons.push(`semantic similarity: ${(embScore * 100).toFixed(0)}%`);
+        }
+      }
+    } catch {
+      // Vector index may not exist yet — fall back to current behavior
+    }
+  }
+
   const ranked = scored.filter(s => s.score > 0).sort((a, b) => b.score - a.score);
   return success(ranked, Date.now() - start);
+}
+
+async function handleSemanticSearchComponents(args: { query: string; limit?: number }) {
+  const start = Date.now();
+  const db = config.neo4j.database;
+  const limit = args.limit ?? 10;
+
+  const embedding = await generateEmbedding(args.query);
+
+  try {
+    const rows = await query(`
+      CALL db.index.vector.queryNodes('component_embedding', toInteger($limit), $embedding)
+      YIELD node, score
+      RETURN node.name AS name, node.filePath AS filePath, node.layer AS layer,
+             node.description AS description, node.props AS props, node.hooks AS hooks,
+             score
+      ORDER BY score DESC
+    `, { limit, embedding }, db);
+
+    const results = rows.map(row => ({
+      ...row,
+      props: safeJsonParse<PropInfo[]>(row.props, []),
+      hooks: safeJsonParse<string[]>(row.hooks, []),
+    }));
+
+    return success(results, Date.now() - start);
+  } catch (e) {
+    const msg = (e as Error).message;
+    if (msg.includes('component_embedding') || msg.includes('vector index')) {
+      return error(
+        'Vector index not available. Run reindex_codebase first to generate embeddings.',
+        'The component_embedding vector index may not exist yet. Reindex to create it.'
+      );
+    }
+    return error(`Semantic search failed: ${msg}`);
+  }
 }
 
 async function handleSearchComponents(args: {
@@ -518,7 +598,50 @@ async function handleSearchComponents(args: {
   }
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
-  const rows = await query(`
+
+  // Try Cypher-native hook/prop filtering first, fall back to JS post-filter
+  const useNativeHookFilter = args.hooks && args.hooks.length > 0;
+  const useNativePropFilter = args.propNames && args.propNames.length > 0;
+
+  if (useNativeHookFilter || useNativePropFilter) {
+    let cypher = `MATCH (c:Component)\n${where}`;
+
+    if (useNativeHookFilter) {
+      params.hooks = args.hooks;
+      params.hookCount = args.hooks!.length;
+      cypher += `\nWITH c
+MATCH (c)-[:USES_HOOK]->(h:Hook) WHERE h.name IN $hooks
+WITH c, count(DISTINCT h) AS hookMatched WHERE hookMatched = $hookCount`;
+    }
+
+    if (useNativePropFilter) {
+      params.propNames = args.propNames;
+      params.propCount = args.propNames!.length;
+      cypher += `\nWITH c
+MATCH (c)-[:HAS_PROP]->(p:Prop) WHERE p.name IN $propNames
+WITH c, count(DISTINCT p) AS propMatched WHERE propMatched = $propCount`;
+    }
+
+    cypher += `\nRETURN c.name AS name, c.filePath AS filePath, c.layer AS layer,
+           c.exportType AS exportType, c.hasState AS hasState,
+           c.props AS props, c.description AS description, c.hooks AS hooks
+    ORDER BY c.name`;
+
+    try {
+      const rows = await query(cypher, params, db);
+      const results = rows.map(row => ({
+        ...row,
+        props: safeJsonParse<PropInfo[]>(row.props, []),
+        hooks: safeJsonParse<string[]>(row.hooks, []),
+      }));
+      return success(results, Date.now() - start);
+    } catch {
+      // Fall through to JS post-filtering if Hook/Prop nodes don't exist yet
+    }
+  }
+
+  // Fallback: basic Cypher + JS post-filtering
+  const fallbackRows = await query(`
     MATCH (c:Component)
     ${where}
     RETURN c.name AS name, c.filePath AS filePath, c.layer AS layer,
@@ -527,8 +650,7 @@ async function handleSearchComponents(args: {
     ORDER BY c.name
   `, params, db);
 
-  // JS-side post-filter for JSON-stored fields
-  let results = rows.map(row => ({
+  let results = fallbackRows.map(row => ({
     ...row,
     props: safeJsonParse<PropInfo[]>(row.props, []),
     hooks: safeJsonParse<string[]>(row.hooks, []),
@@ -605,13 +727,34 @@ async function handleGetChangeImpact(args: { componentName: string; limit?: numb
       riskReason = `${directCount} direct dependent(s), limited blast radius`;
     }
 
+    // Fix 2: Template layer impact — bump risk and add warning
+    const affectsTemplate = affectedLayers.includes('template');
+    const warnings: string[] = [];
+
+    if (affectsTemplate && risk === 'low') {
+      risk = 'medium';
+      riskReason = 'Affects template layer — indirect page impact likely but not traced in graph';
+    }
+    if (affectsTemplate && pageCount === 0) {
+      warnings.push('Component feeds into a template layer. Pages using this template are indirectly affected but not traced as explicit DEPENDS_ON edges.');
+    }
+
+    // Fix 1: Deduplicate transitive dependents — exclude direct overlap
+    const directSet = new Set(directRows.map(r => r.filePath as string));
+    const transitiveOnly = transitiveRows.filter(r => !directSet.has(r.filePath as string));
+    const transitiveOnlyCount = transitiveOnly.length;
+
     const truncatedDirect = directRows.slice(0, limit);
-    const truncatedTransitive = transitiveRows.slice(0, limit);
+    const truncatedTransitive = transitiveOnly.slice(0, limit);
     const truncatedPages = pageRows.slice(0, limit);
+
+    // Fix 3: Omit empty description
+    const { description: compDesc, ...compRest } = comp ?? {};
 
     return {
       component: {
-        ...comp,
+        ...compRest,
+        ...(compDesc ? { description: compDesc } : {}),
         props: safeJsonParse<PropInfo[]>(comp?.props, []),
         hooks: safeJsonParse<string[]>(comp?.hooks, []),
       },
@@ -619,13 +762,15 @@ async function handleGetChangeImpact(args: { componentName: string; limit?: numb
       transitiveDependents: truncatedTransitive,
       affectedPages: truncatedPages,
       affectedLayers,
+      ...(warnings.length > 0 ? { warnings } : {}),
       summary: {
         risk,
         riskReason,
         totalDirectDependents: directCount,
         totalTransitiveDependents: transitiveCount,
+        totalTransitiveOnly: transitiveOnlyCount,
         totalAffectedPages: pageCount,
-        ...(directCount > limit || transitiveCount > limit || pageCount > limit
+        ...(directCount > limit || transitiveOnlyCount > limit || pageCount > limit
           ? { truncated: true, limit }
           : {}),
       },
@@ -768,6 +913,8 @@ export async function main() {
         return handleGetGraphSummary();
       case 'find_similar_components':
         return handleFindSimilarComponents(args as { query?: string; props?: string[]; layer?: string });
+      case 'semantic_search_components':
+        return handleSemanticSearchComponents(args as { query: string; limit?: number });
       case 'search_components':
         return handleSearchComponents(args as { namePattern?: string; layer?: string; hasState?: boolean; hooks?: string[]; propNames?: string[]; exportType?: string });
       case 'get_change_impact':
