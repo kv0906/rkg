@@ -1,5 +1,5 @@
 {
-  "name": "@rkg/react-knowledge-graph",
+  "name": "@kv0906/rkg",
   "version": "1.0.0",
   "description": "CLI and MCP server for React/Next.js knowledge graph analysis",
   "type": "module",
@@ -7,17 +7,40 @@
   "bin": {
     "rkg": "dist/src/cli.js"
   },
+  "files": [
+    "dist/src",
+    "docker-compose.yml",
+    "README.md"
+  ],
   "scripts": {
     "build": "tsc",
     "start": "node dist/src/index.js",
     "dev": "tsc --watch",
-    "test": "node --test dist/test/**/*.test.js"
+    "test": "node --test dist/test/**/*.test.js",
+    "prepublishOnly": "npm run build"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kv0906/rkg.git"
+  },
+  "keywords": [
+    "react",
+    "nextjs",
+    "knowledge-graph",
+    "neo4j",
+    "mcp",
+    "component-analysis"
+  ],
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
   },
   "engines": {
     "node": ">=20.0.0"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
+    "@xenova/transformers": "^2.17.2",
     "neo4j-driver": "^6.0.1",
     "ts-morph": "^24.0.0"
   },

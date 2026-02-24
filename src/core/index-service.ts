@@ -5,7 +5,10 @@ import {
   ingestDependencies,
   ingestModules,
   ingestLayers,
+  ingestProps,
+  ingestHooks,
 } from '../db.js';
+import { buildEmbeddingText, generateEmbedding } from './embedding.js';
 import { toGraphConfig } from '../config.js';
 import type { RkgConfig } from '../types/config.js';
 import type { GraphConfig } from '../types.js';
@@ -51,6 +54,12 @@ export async function runIndex(options: IndexOptions): Promise<IndexResult> {
   // 1. Parse workspace with ts-morph
   const parseResult = parseCodebase(graphConfig);
 
+  // 1b. Generate embeddings for each component
+  for (const comp of parseResult.components) {
+    const text = buildEmbeddingText(comp);
+    comp.embedding = await generateEmbedding(text);
+  }
+
   // 2. Clear existing graph
   await clearGraph(database);
 
@@ -59,6 +68,8 @@ export async function runIndex(options: IndexOptions): Promise<IndexResult> {
   await ingestDependencies(parseResult.dependencies, database);
   await ingestModules(parseResult.modules, parseResult.components, database);
   await ingestLayers(parseResult.layers, parseResult.components, database);
+  await ingestProps(parseResult.components, database);
+  await ingestHooks(parseResult.components, database);
 
   // 4. Build classification summary (count per layer)
   const classificationSummary: ClassificationSummary = {};

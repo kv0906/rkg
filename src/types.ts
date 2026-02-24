@@ -30,6 +30,7 @@ export interface ParsedComponent {
   props: PropInfo[];
   description: string;
   hooks: string[];
+  embedding?: number[];
 }
 
 export interface ParsedDependency {
